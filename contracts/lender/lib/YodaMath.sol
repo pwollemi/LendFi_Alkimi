@@ -39,21 +39,33 @@ contract YodaMath is IYODAMATH {
     }
 
     /**
-     * @dev rpow function
-     * @param x amount
-     * @param n amount
-     * @return r value
+     * @dev rpow function - Calculates x raised to the power of n with RAY precision
+     * @param x base value (in RAY precision)
+     * @param n exponent
+     * @return z result (in RAY precision)
      */
-    function rpow(uint256 x, uint256 n) public pure returns (uint256 r) {
-        r = n % 2 == 1 ? x : RAY;
-        while (n != 0) {
-            if (n % 2 == 1) {
-                r = rmul(r, x);
-                n -= 1;
-            } else {
-                x = rmul(x, x);
-                n /= 2;
+    function rpow(uint256 x, uint256 n) public pure returns (uint256 z) {
+        // Initialize result to RAY (1.0 in ray precision)
+        z = RAY;
+
+        // Early return for x^0 = 1 and x^1 = x cases
+        if (n == 0) {
+            return z;
+        }
+        if (n == 1) {
+            return x;
+        }
+
+        // Binary exponentiation algorithm
+        while (n > 0) {
+            // If the lowest bit of n is 1, multiply result by x
+            if (n & 1 == 1) {
+                z = rmul(z, x);
             }
+            // Square the base
+            x = rmul(x, x);
+            // Shift n right by one bit (divide by 2)
+            n = n >> 1;
         }
     }
 
