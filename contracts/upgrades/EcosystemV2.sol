@@ -63,16 +63,16 @@ contract EcosystemV2 is
     mapping(address src => address vesting) public vestingContracts;
     uint256[50] private __gap;
 
-    /// @dev Prevents receiving Ether
-    receive() external payable {
-        revert();
-    }
     /// @custom:oz-upgrades-unsafe-allow constructor
 
     constructor() {
         _disableInitializers();
     }
 
+    /// @dev Prevents receiving Ether
+    receive() external payable {
+        revert("NO_ETHER_ACCEPTED");
+    }
     /**
      * @dev Initializes the ecosystem contract.
      * @notice Sets up the initial state of the contract, including roles and token supplies.
@@ -85,6 +85,7 @@ contract EcosystemV2 is
      * @custom:events-emits {Initialized} event.
      * @custom:throws CustomError("ZERO_ADDRESS_DETECTED") if any of the input addresses are zero.
      */
+
     function initialize(address token, address guardian, address pauser) external initializer {
         __Pausable_init();
         __AccessControl_init();
