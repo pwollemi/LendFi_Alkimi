@@ -92,7 +92,6 @@ contract LendefiV2 is
     bytes32 internal constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 internal constant MANAGER_ROLE = keccak256("MANAGER_ROLE");
     bytes32 internal constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
-    bytes32 internal constant FLASH_LOAN_RETURN = keccak256("FLASH_LOAN_RETURN");
 
     // State variables
     /// @dev USDC token instance
@@ -1845,7 +1844,7 @@ contract LendefiV2 is
         }
 
         address[] memory assets = positionAssets[user][positionId];
-        uint256 liqLevel;
+        uint256 liqLevel = 0;
         uint256 len = assets.length;
 
         for (uint256 i; i < len; ++i) {
