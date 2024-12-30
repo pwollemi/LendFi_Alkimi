@@ -270,6 +270,33 @@ contract EcosystemV2 is
     }
 
     /**
+     * @dev Updates the maximum one-time reward amount.
+     * @notice Allows updating the maximum reward that can be issued in a single transaction.
+     * @param newMaxReward The new maximum reward amount.
+     * @custom:requires-role MANAGER_ROLE
+     * @custom:requires Contract must not be paused
+     * @custom:requires New max reward must be greater than 0
+     * @custom:requires New max reward must not exceed 5% of remaining reward supply
+     * @custom:events-emits {MaxRewardUpdated} event
+     * @custom:throws CustomError("INVALID_AMOUNT") if the amount is 0
+     * @custom:throws CustomError("EXCESSIVE_MAX_REWARD") if the amount exceeds 5% of remaining reward supply
+     */
+    function updateMaxReward(uint256 newMaxReward) external whenNotPaused onlyRole(MANAGER_ROLE) {
+        if (newMaxReward == 0) revert CustomError("INVALID_AMOUNT");
+
+        // Ensure the maximum reward isn't excessive (no more than 5% of remaining reward supply)
+        uint256 remainingRewards = rewardSupply - issuedReward;
+        if (newMaxReward > remainingRewards / 20) {
+            revert CustomError("EXCESSIVE_MAX_REWARD");
+        }
+
+        uint256 oldMaxReward = maxReward;
+        maxReward = newMaxReward;
+
+        emit MaxRewardUpdated(msg.sender, oldMaxReward, newMaxReward);
+    }
+
+    /**
      * @dev Authorizes an upgrade to a new implementation.
      * @notice This function is called during the upgrade process to authorize the new implementation.
      * @param newImplementation The address of the new implementation contract.
@@ -277,6 +304,7 @@ contract EcosystemV2 is
      * @custom:events-emits {Upgrade} event
      */
     /// @inheritdoc UUPSUpgradeable
+
     function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {
         ++version;
         emit Upgrade(msg.sender, newImplementation);
