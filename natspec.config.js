@@ -8,6 +8,8 @@ module.exports = {
   include: 'contracts/ecosystem/',
   include: 'contracts/upgrades/',
   include: 'contracts/interfaces/',
+  include: 'contracts/lender/',
   exclude: 'contracts/vendor/**/',
+  exclude: 'contracts/mock/**/',
   enforceInheritdoc: 'false'
 };
