@@ -4,8 +4,8 @@ pragma solidity 0.8.23;
 /**
  * @title Yoda Math Contract
  * @notice Compunding and beyond
- * @author Alkimi Finance Org Inc
- * @custom:security-contact security@nlkimi-labs.xysz
+ * @author Alkimi Finance Org
+ * @custom:security-contact security@alkimi.org
  */
 
 import {IYODAMATH} from "../../interfaces/IYodaMath.sol";
