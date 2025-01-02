@@ -9,7 +9,7 @@ import {WETHPriceConsumerV3} from "../../contracts/mock/WETHOracle.sol";
 import {StablePriceConsumerV3} from "../../contracts/mock/StableOracle.sol";
 import {TokenMock} from "../../contracts/mock/TokenMock.sol";
 
-contract GetPositionAssetsTest is BasicDeploy {
+contract getPositionCollateralAssetsTest is BasicDeploy {
     // Assets
     WETHPriceConsumerV3 internal wethOracleInstance;
     StablePriceConsumerV3 internal stableOracleInstance;
@@ -160,15 +160,15 @@ contract GetPositionAssetsTest is BasicDeploy {
         vm.stopPrank();
     }
 
-    function test_GetPositionAssets_Empty() public {
+    function test_getPositionCollateralAssets_Empty() public {
         uint256 positionId = _setupPosition(alice, false);
 
         // Position should have no assets yet
-        address[] memory assets = LendefiInstance.getPositionAssets(alice, positionId);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(alice, positionId);
         assertEq(assets.length, 0, "New position should have no assets");
     }
 
-    function test_GetPositionAssets_SingleAsset() public {
+    function test_getPositionCollateralAssets_SingleAsset() public {
         uint256 positionId = _setupPosition(alice, false);
 
         // Add WETH collateral
@@ -176,7 +176,7 @@ contract GetPositionAssetsTest is BasicDeploy {
         _addCollateralToPosition(alice, positionId, address(wethInstance), wethAmount);
 
         // Check position assets
-        address[] memory assets = LendefiInstance.getPositionAssets(alice, positionId);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(alice, positionId);
 
         assertEq(assets.length, 1, "Position should have exactly one asset");
         assertEq(assets[0], address(wethInstance), "Asset should be WETH");
@@ -186,7 +186,7 @@ contract GetPositionAssetsTest is BasicDeploy {
         assertEq(collateralAmount, wethAmount, "Collateral amount should match");
     }
 
-    function test_GetPositionAssets_IsolatedPosition() public {
+    function test_getPositionCollateralAssets_IsolatedPosition() public {
         uint256 positionId = _setupPosition(alice, true);
 
         // Add LINK collateral (isolated position can only have LINK)
@@ -194,7 +194,7 @@ contract GetPositionAssetsTest is BasicDeploy {
         _addCollateralToPosition(alice, positionId, address(linkInstance), linkAmount);
 
         // Check position assets
-        address[] memory assets = LendefiInstance.getPositionAssets(alice, positionId);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(alice, positionId);
 
         assertEq(assets.length, 1, "Position should have exactly one asset");
         assertEq(assets[0], address(linkInstance), "Asset should be LINK");
@@ -204,7 +204,7 @@ contract GetPositionAssetsTest is BasicDeploy {
         assertEq(collateralAmount, linkAmount, "Collateral amount should match");
     }
 
-    function test_GetPositionAssets_MultiplePositions() public {
+    function test_getPositionCollateralAssets_MultiplePositions() public {
         // Create  positions for Alice
         uint256 position1 = _setupPosition(alice, false);
         uint256 position2 = _setupPosition(alice, true);
@@ -214,17 +214,17 @@ contract GetPositionAssetsTest is BasicDeploy {
         _addCollateralToPosition(alice, position2, address(linkInstance), 20 ether);
 
         // Check position assets for position 1
-        address[] memory assets1 = LendefiInstance.getPositionAssets(alice, position1);
+        address[] memory assets1 = LendefiInstance.getPositionCollateralAssets(alice, position1);
         assertEq(assets1.length, 1, "Position 1 should have one asset");
         assertEq(assets1[0], address(wethInstance), "Position 1 asset should be WETH");
 
         // Check position assets for position 2
-        address[] memory assets2 = LendefiInstance.getPositionAssets(alice, position2);
+        address[] memory assets2 = LendefiInstance.getPositionCollateralAssets(alice, position2);
         assertEq(assets2.length, 1, "Position 2 should have one asset");
         assertEq(assets2[0], address(linkInstance), "Position 2 asset should be LINK");
     }
 
-    function test_GetPositionAssets_MultipleAssets() public {
+    function test_getPositionCollateralAssets_MultipleAssets() public {
         // Create a non-isolated position
         uint256 positionId = _setupPosition(alice, false);
 
@@ -237,7 +237,7 @@ contract GetPositionAssetsTest is BasicDeploy {
         _addCollateralToPosition(alice, positionId, address(usdcInstance), usdcAmount);
 
         // Check position assets
-        address[] memory assets = LendefiInstance.getPositionAssets(alice, positionId);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(alice, positionId);
 
         assertEq(assets.length, 2, "Position should have exactly  assets");
 
@@ -266,7 +266,7 @@ contract GetPositionAssetsTest is BasicDeploy {
         assertEq(usdcCollateralAmount, usdcAmount, "USDC collateral amount should match");
     }
 
-    function test_GetPositionAssets_AfterWithdrawal() public {
+    function test_getPositionCollateralAssets_AfterWithdrawal() public {
         uint256 positionId = _setupPosition(alice, false);
 
         // Add WETH and USDC collateral instead of LINK (since LINK requires isolation mode)
@@ -279,7 +279,7 @@ contract GetPositionAssetsTest is BasicDeploy {
         vm.stopPrank();
 
         // Check position assets
-        address[] memory assets = LendefiInstance.getPositionAssets(alice, positionId);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(alice, positionId);
 
         assertEq(assets.length, 1, "Position should have exactly one asset after withdrawal");
         assertEq(assets[0], address(usdcInstance), "Remaining asset should be USDC");
@@ -292,19 +292,19 @@ contract GetPositionAssetsTest is BasicDeploy {
         assertEq(usdcCollateralAmount, 15_000e6, "USDC collateral amount should remain unchanged");
     }
 
-    function testRevert_GetPositionAssets_InvalidPosition() public {
+    function testRevert_getPositionCollateralAssets_InvalidPosition() public {
         // This should fail since position ID 999 doesn't exist
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, alice, 999));
-        LendefiInstance.getPositionAssets(alice, 999);
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, alice, 999));
+        LendefiInstance.getPositionCollateralAssets(alice, 999);
     }
 
-    function testRevert_GetPositionAssets_WrongUser() public {
+    function testRevert_getPositionCollateralAssets_WrongUser() public {
         // Create a position for Alice
         uint256 positionId = _setupPosition(alice, false);
         _addCollateralToPosition(alice, positionId, address(wethInstance), 1 ether);
 
         // Try to access Alice's position as Bob (should fail)
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, bob, positionId));
-        LendefiInstance.getPositionAssets(bob, positionId);
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, bob, positionId));
+        LendefiInstance.getPositionCollateralAssets(bob, positionId);
     }
 }
