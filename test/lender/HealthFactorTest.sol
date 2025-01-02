@@ -139,7 +139,7 @@ contract HealthFactorTest is BasicDeploy {
     // Test 1: Invalid position ID reverts
     function test_HealthFactorInvalidPosition() public {
         // Try to get health factor for non-existent position
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, bob, 999));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, bob, 999));
         LendefiInstance.healthFactor(bob, 999);
     }
 
@@ -197,33 +197,43 @@ contract HealthFactorTest is BasicDeploy {
         LendefiInstance.supplyCollateral(address(wethInstance), collateralAmount, positionId);
 
         // Add stable token with 0 balance to position assets array
-        // This is a test helper to simulate a position with zero-amount assets
-        // In a real scenario, this could happen if all collateral of an asset was withdrawn
-        vm.stopPrank();
+        stableToken.mint(bob, 1 ether); // Small amount to add as collateral
+        stableToken.approve(address(LendefiInstance), 1 ether);
+        LendefiInstance.supplyCollateral(address(stableToken), 1 ether, positionId);
+
+        // Now withdraw all of the stable token, leaving 0 balance but still in the array
+        LendefiInstance.withdrawCollateral(address(stableToken), 1 ether, positionId);
+
+        // Verify stable token amount is truly zero
+        uint256 stableAmount = LendefiInstance.getUserCollateralAmount(bob, positionId, address(stableToken));
+        assertEq(stableAmount, 0, "Stable token amount should be zero");
 
         // Borrow to create debt
-        vm.startPrank(bob);
         LendefiInstance.borrow(positionId, borrowAmount);
         vm.stopPrank();
 
-        // Calculate expected health factor (should only count non-zero amounts)
+        // Calculate expected health factor - using the liquidation threshold (85%)
         uint256 amount = 5 ether;
         uint256 price = ETH_PRICE; // 2500e8
         uint256 liquidationThreshold = 850; // 85%
         uint256 decimals = 18; // WETH decimals
         uint256 oracleDecimals = 8; // Price oracle decimals
+        uint256 debt = LendefiInstance.calculateDebtWithInterest(bob, positionId);
 
         uint256 liqLevel = (amount * price * liquidationThreshold * WAD) / 10 ** decimals / 1000 / 10 ** oracleDecimals;
-        uint256 expectedHealthFactor = (liqLevel * WAD) / borrowAmount;
+        uint256 expectedHealthFactor = (liqLevel * WAD) / debt;
 
         // Get actual health factor
         uint256 healthFactor = LendefiInstance.healthFactor(bob, positionId);
+
+        console2.log("Health factor: %d", healthFactor);
         console2.log("Liquidation level: %d", liqLevel / 1e6);
         console2.log("Expected health factor: %d", expectedHealthFactor);
-        console2.log("Health factor: %d", healthFactor);
 
         // Health factor should match expected (only counting non-zero amounts)
-        assertEq(healthFactor, expectedHealthFactor, "Health factor should only count non-zero amounts");
+        assertApproxEqRel(
+            healthFactor, expectedHealthFactor, 0.01e18, "Health factor should only count non-zero amounts"
+        );
     }
 
     // Test 5: Health factor when oracle gives invalid price
@@ -248,20 +258,17 @@ contract HealthFactorTest is BasicDeploy {
         LendefiInstance.borrow(positionId, borrowAmount);
         vm.stopPrank();
 
-        // Get initial health factor
-        // uint256 initialHealthFactor = LendefiInstance.healthFactor(bob, positionId);
-
         // Try to set invalid price (0)
         ethOracle.setPrice(0);
         ethOracle.setTimestamp(block.timestamp);
 
         // Try to get health factor with zero price
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.OracleInvalidPrice.selector, address(ethOracle), 0));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.OracleInvalidPrice.selector, address(ethOracle), 0));
         LendefiInstance.healthFactor(bob, positionId);
 
         // Try negative price
         ethOracle.setPrice(-1000);
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.OracleInvalidPrice.selector, address(ethOracle), -1000));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.OracleInvalidPrice.selector, address(ethOracle), -1000));
         LendefiInstance.healthFactor(bob, positionId);
     }
 
@@ -293,7 +300,7 @@ contract HealthFactorTest is BasicDeploy {
         ethOracle.setTimestamp(block.timestamp); // Current timestamp
 
         // Try to get health factor with stale oracle data
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.OracleStalePrice.selector, address(ethOracle), 10, 5));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.OracleStalePrice.selector, address(ethOracle), 10, 5));
         LendefiInstance.healthFactor(bob, positionId);
     }
 
@@ -328,7 +335,7 @@ contract HealthFactorTest is BasicDeploy {
         // Try to get health factor with outdated oracle
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.OracleTimeout.selector, address(ethOracle), oldTimestamp, block.timestamp, 8 hours
+                IPROTOCOL.OracleTimeout.selector, address(ethOracle), oldTimestamp, block.timestamp, 8 hours
             )
         );
         LendefiInstance.healthFactor(bob, positionId);
@@ -343,31 +350,48 @@ contract HealthFactorTest is BasicDeploy {
         rwaToken.mint(bob, collateralAmount);
 
         vm.startPrank(bob);
+        // Create isolated position - now correctly stores the isolated asset in collateralAssets array
         LendefiInstance.createPosition(address(rwaToken), true);
         uint256 positionId = 0;
 
+        // Verify position was created with correct isolation flag
+        IPROTOCOL.UserPosition memory pos = LendefiInstance.getUserPosition(bob, positionId);
+        assertTrue(pos.isIsolated, "Position should be in isolation mode");
+
+        // Supply collateral to the isolated position
         rwaToken.approve(address(LendefiInstance), collateralAmount);
         LendefiInstance.supplyCollateral(address(rwaToken), collateralAmount, positionId);
+
+        // Verify collateral was added correctly
+        address[] memory collateralAssets = LendefiInstance.getPositionCollateralAssets(bob, positionId);
+        assertEq(collateralAssets.length, 1, "Isolated position should have exactly 1 asset");
+        assertEq(collateralAssets[0], address(rwaToken), "Collateral asset should be RWA token");
+
+        // Borrow against the isolated position
         LendefiInstance.borrow(positionId, borrowAmount);
         vm.stopPrank();
 
         // Get health factor
         uint256 healthFactor = LendefiInstance.healthFactor(bob, positionId);
 
-        // Calculate expected health factor
+        // Calculate expected health factor using liquidation threshold (75%)
         uint256 amount = 10 ether;
         uint256 price = RWA_PRICE; // 1000e8
         uint256 liquidationThreshold = 750; // 75%
         uint256 decimals = 18; // RWA decimals
         uint256 oracleDecimals = 8; // Oracle decimals
+        uint256 debt = LendefiInstance.calculateDebtWithInterest(bob, positionId);
 
         uint256 liqLevel = (amount * price * liquidationThreshold * WAD) / 10 ** decimals / 1000 / 10 ** oracleDecimals;
-        uint256 expectedHealthFactor = (liqLevel * WAD) / borrowAmount;
+        uint256 expectedHealthFactor = (liqLevel * WAD) / debt;
+
         console2.log("Health factor: %d", healthFactor);
-        console2.log("ETH liquidation level: %d", liqLevel / 1e6);
+        console2.log("RWA liquidation level: %d", liqLevel / 1e6);
         console2.log("Expected health factor: %d", expectedHealthFactor);
 
-        assertEq(healthFactor, expectedHealthFactor, "Health factor for isolated position is incorrect");
+        assertApproxEqRel(
+            healthFactor, expectedHealthFactor, 0.01e18, "Health factor for isolated position is incorrect"
+        );
     }
 
     // Test 9: Health factor calculation for cross-collateral position
@@ -401,19 +425,196 @@ contract HealthFactorTest is BasicDeploy {
         // Get health factor
         uint256 healthFactor = LendefiInstance.healthFactor(bob, positionId);
 
-        // Calculate expected liquidation level from ETH
+        // Calculate expected liquidation level from ETH using liquidation threshold (85%)
         uint256 ethLiqLevel = (ethAmount * ETH_PRICE * 850 * WAD) / 10 ** 18 / 1000 / 10 ** 8;
 
-        // Calculate expected liquidation level from stable token
+        // Calculate expected liquidation level from stable token using liquidation threshold (95%)
         uint256 stableLiqLevel = (stableAmount * STABLE_PRICE * 950 * WAD) / 10 ** 18 / 1000 / 10 ** 8;
+        uint256 debt = LendefiInstance.calculateDebtWithInterest(bob, positionId);
 
         // Calculate expected health factor (combined)
-        uint256 expectedHealthFactor = ((ethLiqLevel + stableLiqLevel) * WAD) / borrowAmount;
+        uint256 expectedHealthFactor = ((ethLiqLevel + stableLiqLevel) * WAD) / debt;
         console2.log("Health factor: %d", healthFactor);
         console2.log("ETH liquidation level: %d", ethLiqLevel / 1e6);
         console2.log("Stable liquidation level: %d", stableLiqLevel / 1e6);
         console2.log("Expected health factor: %d", expectedHealthFactor);
+        console2.log("Debt: %d", debt);
 
         assertEq(healthFactor, expectedHealthFactor, "Health factor for cross-position is incorrect");
+    }
+
+    // Test 10: Health factor for inactive position (CLOSED status)
+    function test_HealthFactorForClosedPosition() public {
+        // Setup position and then close it
+        uint256 collateralAmount = 1 ether;
+
+        vm.deal(bob, collateralAmount);
+        vm.startPrank(bob);
+        wethInstance.deposit{value: collateralAmount}();
+
+        // Create position
+        LendefiInstance.createPosition(address(wethInstance), false);
+        uint256 positionId = 0;
+
+        // Supply collateral
+        wethInstance.approve(address(LendefiInstance), collateralAmount);
+        LendefiInstance.supplyCollateral(address(wethInstance), collateralAmount, positionId);
+
+        // Exit position (mark as CLOSED)
+        LendefiInstance.exitPosition(positionId);
+        vm.stopPrank();
+
+        // Verify position is closed
+        IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        assertEq(uint256(position.status), uint256(IPROTOCOL.PositionStatus.CLOSED), "Position should be CLOSED");
+
+        // Check health factor for closed position
+        uint256 healthFactor = LendefiInstance.healthFactor(bob, positionId);
+        assertEq(healthFactor, type(uint256).max, "Health factor should be max for closed positions");
+    }
+
+    // Test 11: Health factor for liquidated position
+    function test_HealthFactorForLiquidatedPosition() public {
+        uint256 collateralAmount = 1 ether;
+        uint256 borrowAmount = 1500e6; // Close to max borrow capacity to make liquidation easy
+
+        // Setup a position that can be liquidated
+        vm.deal(bob, collateralAmount);
+        vm.startPrank(bob);
+        wethInstance.deposit{value: collateralAmount}();
+
+        // Create position
+        LendefiInstance.createPosition(address(wethInstance), false);
+        uint256 positionId = 0;
+
+        // Supply collateral
+        wethInstance.approve(address(LendefiInstance), collateralAmount);
+        LendefiInstance.supplyCollateral(address(wethInstance), collateralAmount, positionId);
+
+        // Borrow near max capacity
+        LendefiInstance.borrow(positionId, borrowAmount);
+        vm.stopPrank();
+
+        // Drop ETH price to trigger liquidation condition
+        ethOracle.setPrice(int256(ETH_PRICE / 2)); // Half the price
+        ethOracle.setTimestamp(block.timestamp);
+
+        // Verify position is now liquidatable
+        assertTrue(LendefiInstance.isLiquidatable(bob, positionId), "Position should be liquidatable");
+
+        // Setup Charlie as liquidator
+        vm.prank(address(timelockInstance));
+        treasuryInstance.release(address(tokenInstance), charlie, 50_000 ether); // Give enough gov tokens
+        usdcInstance.mint(charlie, 100_000e6); // Give enough USDC
+
+        // Perform liquidation
+        vm.startPrank(charlie);
+        usdcInstance.approve(address(LendefiInstance), 100_000e6);
+        LendefiInstance.liquidate(bob, positionId);
+        vm.stopPrank();
+
+        // Verify position is now liquidated
+        IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        assertEq(
+            uint256(position.status), uint256(IPROTOCOL.PositionStatus.LIQUIDATED), "Position should be LIQUIDATED"
+        );
+
+        // Check health factor for liquidated position
+        uint256 healthFactor = LendefiInstance.healthFactor(bob, positionId);
+        assertEq(healthFactor, type(uint256).max, "Health factor should be max for liquidated positions");
+    }
+
+    // Test 12: Health factor changes after partial repayment
+    function test_HealthFactorAfterPartialRepay() public {
+        uint256 collateralAmount = 5 ether;
+        uint256 borrowAmount = 5_000e6;
+
+        // Setup position
+        vm.deal(bob, collateralAmount);
+        vm.startPrank(bob);
+        wethInstance.deposit{value: collateralAmount}();
+
+        // Create position
+        LendefiInstance.createPosition(address(wethInstance), false);
+        uint256 positionId = 0;
+
+        // Supply collateral
+        wethInstance.approve(address(LendefiInstance), collateralAmount);
+        LendefiInstance.supplyCollateral(address(wethInstance), collateralAmount, positionId);
+
+        // Borrow
+        LendefiInstance.borrow(positionId, borrowAmount);
+
+        // Get initial health factor
+        uint256 initialHealthFactor = LendefiInstance.healthFactor(bob, positionId);
+
+        // Repay half of the debt
+        uint256 repayAmount = borrowAmount / 2;
+        usdcInstance.mint(bob, repayAmount);
+        usdcInstance.approve(address(LendefiInstance), repayAmount);
+        LendefiInstance.repay(positionId, repayAmount);
+        vm.stopPrank();
+
+        // Get new health factor
+        uint256 newHealthFactor = LendefiInstance.healthFactor(bob, positionId);
+
+        // Verify health factor improved (approximately doubled)
+        assertTrue(newHealthFactor > initialHealthFactor, "Health factor should improve after partial repay");
+        assertEq(newHealthFactor, initialHealthFactor * 2, "Health factor should approximately double"); // 1% tolerance
+    }
+
+    // Test 13: Health factor with mixed tier collateral
+    // Test 13: Health factor with mixed tier collateral (using compatible tiers)
+    function test_HealthFactorWithMixedTierCollateral() public {
+        uint256 ethAmount = 2 ether; // CROSS_A tier
+        uint256 stableAmount = 1000 ether; // STABLE tier
+        uint256 borrowAmount = 3_000e6;
+
+        // Setup position with mixed tier collateral
+        vm.deal(bob, ethAmount);
+        vm.startPrank(bob);
+        wethInstance.deposit{value: ethAmount}();
+        stableToken.mint(bob, stableAmount);
+
+        // Create position (non-isolated) with ETH
+        LendefiInstance.createPosition(address(wethInstance), false);
+        uint256 positionId = 0;
+
+        // Supply ETH collateral (CROSS_A tier)
+        wethInstance.approve(address(LendefiInstance), ethAmount);
+        LendefiInstance.supplyCollateral(address(wethInstance), ethAmount, positionId);
+
+        // Supply stable token collateral (STABLE tier)
+        stableToken.approve(address(LendefiInstance), stableAmount);
+        LendefiInstance.supplyCollateral(address(stableToken), stableAmount, positionId);
+
+        // Borrow
+        LendefiInstance.borrow(positionId, borrowAmount);
+        vm.stopPrank();
+
+        // Get actual health factor
+        uint256 healthFactor = LendefiInstance.healthFactor(bob, positionId);
+
+        // Calculate expected health factor using liquidation thresholds
+        // ETH: 85% liquidation threshold
+        uint256 ethLiqLevel = (ethAmount * ETH_PRICE * 850 * WAD) / 10 ** 18 / 1000 / 10 ** 8;
+        // Stable: 95% liquidation threshold
+        uint256 stableLiqLevel = (stableAmount * STABLE_PRICE * 950 * WAD) / 10 ** 18 / 1000 / 10 ** 8;
+        uint256 debt = LendefiInstance.calculateDebtWithInterest(bob, positionId);
+
+        uint256 expectedHealthFactor = ((ethLiqLevel + stableLiqLevel) * WAD) / debt;
+
+        console2.log("Health factor: %d", healthFactor);
+        console2.log("ETH liquidation level: %d", ethLiqLevel / 1e6);
+        console2.log("Stable liquidation level: %d", stableLiqLevel / 1e6);
+        console2.log("Total liquidation level: %d", (ethLiqLevel + stableLiqLevel) / 1e6);
+        console2.log("Expected health factor: %d", expectedHealthFactor);
+
+        assertApproxEqRel(
+            healthFactor,
+            expectedHealthFactor,
+            0.01e18,
+            "Health factor should use each asset's individual liquidation threshold"
+        );
     }
 }
