@@ -299,7 +299,7 @@ contract GetHighestTierTest is BasicDeploy {
     // Test 8: Try to get highest tier for an invalid position
     function test_GetHighestTier_InvalidPosition() public {
         // Try to access an invalid position
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, alice, 0));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, alice, 0));
         LendefiInstance.getHighestTier(alice, 0);
     }
 
