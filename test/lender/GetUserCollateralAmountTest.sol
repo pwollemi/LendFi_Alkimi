@@ -160,7 +160,7 @@ contract GetUserCollateralAmountTest is BasicDeploy {
     // Test 3: Try to get collateral for an invalid position
     function test_GetUserCollateralAmount_InvalidPosition() public {
         // Try to access an invalid position
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, alice, 0));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, alice, 0));
         LendefiInstance.getUserCollateralAmount(alice, 0, address(wethInstance));
     }
 
@@ -212,8 +212,9 @@ contract GetUserCollateralAmountTest is BasicDeploy {
 
         // Double check that the internal accounting of getUserCollateralAmount for isolated positions works correctly
         IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(alice, positionId);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(alice, positionId);
         assertTrue(position.isIsolated, "Position should be isolated");
-        assertEq(position.isolatedAsset, address(mockWbtc), "Isolated asset should be WBTC");
+        assertEq(assets[0], address(mockWbtc), "Isolated asset should be WBTC");
 
         // Calculate credit limit and verify it makes sense based on the collateral
         uint256 creditLimit = LendefiInstance.calculateCreditLimit(alice, positionId);
