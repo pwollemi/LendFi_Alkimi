@@ -135,8 +135,9 @@ contract CreatePositionTest is BasicDeploy {
 
         // Verify position is not isolated
         IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, 0);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(bob, 0);
         assertEq(position.isIsolated, false, "Position should not be isolated");
-        assertEq(position.isolatedAsset, address(0), "Isolated asset should be zero for non-isolated position");
+        assertEq(assets.length, 0, "Isolated asset should be zero for non-isolated position");
 
         vm.stopPrank();
     }
@@ -156,8 +157,9 @@ contract CreatePositionTest is BasicDeploy {
 
         // Verify position is isolated
         IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, 0);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(bob, 0);
         assertEq(position.isIsolated, true, "Position should be isolated");
-        assertEq(position.isolatedAsset, isolatedAsset, "Isolated asset should be set correctly");
+        assertEq(assets[0], isolatedAsset, "Isolated asset should be set correctly");
 
         vm.stopPrank();
     }
@@ -182,7 +184,7 @@ contract CreatePositionTest is BasicDeploy {
         vm.startPrank(bob);
 
         // Try to create a position with an unlisted asset
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.AssetNotListed.selector, notListedAsset));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.AssetNotListed.selector, notListedAsset));
         LendefiInstance.createPosition(notListedAsset, false);
 
         // Verify no position was created
@@ -235,8 +237,9 @@ contract CreatePositionTest is BasicDeploy {
 
         // Verify position 1 is isolated
         IPROTOCOL.UserPosition memory position1 = LendefiInstance.getUserPosition(bob, 1);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(bob, 1);
         assertEq(position1.isIsolated, true, "Position 1 should be isolated");
-        assertEq(position1.isolatedAsset, isolatedAsset, "Position 1 should have correct isolated asset");
+        assertEq(assets[0], isolatedAsset, "Position 1 should have correct isolated asset");
 
         // Verify position 2 is non-isolated
         IPROTOCOL.UserPosition memory position2 = LendefiInstance.getUserPosition(bob, 2);
@@ -267,10 +270,11 @@ contract CreatePositionTest is BasicDeploy {
         // Verify each position has correct properties
         IPROTOCOL.UserPosition memory bobPosition = LendefiInstance.getUserPosition(bob, 0);
         IPROTOCOL.UserPosition memory charliePosition = LendefiInstance.getUserPosition(charlie, 0);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(charlie, 0);
 
         assertEq(bobPosition.isIsolated, false, "Bob's position should not be isolated");
         assertEq(charliePosition.isIsolated, true, "Charlie's position should be isolated");
-        assertEq(charliePosition.isolatedAsset, isolatedAsset, "Charlie's position should have correct isolated asset");
+        assertEq(assets[0], isolatedAsset, "Charlie's position should have correct isolated asset");
     }
 
     // Test 8: Maximum number of positions (stress test)
@@ -311,12 +315,13 @@ contract CreatePositionTest is BasicDeploy {
 
         // Verify position
         IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, 0);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(bob, 0);
         assertEq(position.isIsolated, isIsolated, "Position isolation flag should match input");
 
         if (isIsolated) {
-            assertEq(position.isolatedAsset, asset, "Isolated asset should be set");
+            assertEq(assets[0], asset, "Isolated asset should be set");
         } else {
-            assertEq(position.isolatedAsset, address(0), "Isolated asset should be zero for non-isolated position");
+            assertEq(assets.length, 0, "Isolated asset should be zero for non-isolated position");
         }
 
         vm.stopPrank();
@@ -376,11 +381,12 @@ contract CreatePositionTest is BasicDeploy {
         // Check all positions
         for (uint256 i = 0; i < 3; i++) {
             IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, i);
+            address[] memory assets = LendefiInstance.getPositionCollateralAssets(bob, i);
 
             if (position.isIsolated) {
-                assertNotEq(position.isolatedAsset, address(0), "Isolated position should have non-zero asset");
+                assertNotEq(assets[0], address(0), "Isolated position should have non-zero asset");
             } else {
-                assertEq(position.isolatedAsset, address(0), "Non-isolated position should have zero asset");
+                assertEq(assets.length, 0, "Non-isolated position should have zero asset");
             }
         }
 
