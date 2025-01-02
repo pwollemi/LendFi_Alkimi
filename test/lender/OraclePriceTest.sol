@@ -71,14 +71,14 @@ contract OraclePriceTest is BasicDeploy {
         mockOracle.setPrice(0);
 
         // Expect revert with OracleInvalidPrice
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.OracleInvalidPrice.selector, address(mockOracle), 0));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.OracleInvalidPrice.selector, address(mockOracle), 0));
         LendefiInstance.getAssetPriceOracle(address(mockOracle));
 
         // Set price to negative
         mockOracle.setPrice(-100);
 
         // Expect revert with OracleInvalidPrice
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.OracleInvalidPrice.selector, address(mockOracle), -100));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.OracleInvalidPrice.selector, address(mockOracle), -100));
         LendefiInstance.getAssetPriceOracle(address(mockOracle));
     }
 
@@ -89,7 +89,7 @@ contract OraclePriceTest is BasicDeploy {
         mockOracle.setAnsweredInRound(5);
 
         // Expect revert with OracleStalePrice
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.OracleStalePrice.selector, address(mockOracle), 10, 5));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.OracleStalePrice.selector, address(mockOracle), 10, 5));
         LendefiInstance.getAssetPriceOracle(address(mockOracle));
     }
 
@@ -102,7 +102,7 @@ contract OraclePriceTest is BasicDeploy {
         // Expect revert with OracleTimeout
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.OracleTimeout.selector, address(mockOracle), oldTimestamp, block.timestamp, 8 hours
+                IPROTOCOL.OracleTimeout.selector, address(mockOracle), oldTimestamp, block.timestamp, 8 hours
             )
         );
         LendefiInstance.getAssetPriceOracle(address(mockOracle));
@@ -223,7 +223,7 @@ contract OraclePriceTest is BasicDeploy {
         // Now this should revert due to volatility with stale timestamp
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.OracleInvalidPriceVolatility.selector,
+                IPROTOCOL.OracleInvalidPriceVolatility.selector,
                 address(mockOracle),
                 1200e8,
                 20 // 20% change
