@@ -269,7 +269,7 @@ contract UpdateAssetConfigTest is BasicDeploy {
 
         // Try supplying more collateral - should revert
         vm.startPrank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.AssetDisabled.selector, address(testToken)));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.AssetDisabled.selector, address(testToken)));
         LendefiInstance.supplyCollateral(address(testToken), 5 ether, 0);
         vm.stopPrank();
     }
