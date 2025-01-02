@@ -226,7 +226,7 @@ contract WithdrawCollateralTest is BasicDeploy {
         assertEq(positionCollateral, 0, "Position collateral should be zero");
 
         // Check position assets array is empty
-        address[] memory posAssets = LendefiInstance.getPositionAssets(bob, positionId);
+        address[] memory posAssets = LendefiInstance.getPositionCollateralAssets(bob, positionId);
         assertEq(posAssets.length, 0, "Position should have no assets");
     }
 
@@ -250,8 +250,9 @@ contract WithdrawCollateralTest is BasicDeploy {
 
         // Check position is still in isolation mode
         IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(bob, positionId);
         assertTrue(position.isIsolated, "Position should remain isolated");
-        assertEq(position.isolatedAsset, address(rwaToken), "Isolated asset should be RWA token");
+        assertEq(assets[0], address(rwaToken), "Isolated asset should be RWA token");
     }
 
     // Test 4: Withdraw non-isolated asset from an isolated position should fail
@@ -264,27 +265,10 @@ contract WithdrawCollateralTest is BasicDeploy {
         // Try to withdraw an asset that's not in the position
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.InsufficientCollateralBalance.selector, bob, positionId, address(rwaToken), 11 ether, 10 ether
+                IPROTOCOL.InsufficientCollateralBalance.selector, bob, positionId, address(rwaToken), 11 ether, 10 ether
             )
         );
         LendefiInstance.withdrawCollateral(address(rwaToken), 11 ether, positionId);
-        vm.stopPrank();
-    }
-
-    // Test 5: Withdraw wrong asset from an isolated position should fail
-    function test_WithdrawWrongAssetFromIsolatedPosition() public {
-        // Create isolated position with RWA token
-        uint256 positionId = _createPosition(bob, address(rwaToken), true);
-        _supplyCollateral(bob, address(rwaToken), 10 ether, positionId);
-
-        vm.startPrank(bob);
-        // Try to withdraw wrong asset type from isolated position
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Lendefi.InvalidAssetForIsolation.selector, bob, positionId, address(wethInstance), address(rwaToken)
-            )
-        );
-        LendefiInstance.withdrawCollateral(address(wethInstance), 1 ether, positionId);
         vm.stopPrank();
     }
 
@@ -334,7 +318,7 @@ contract WithdrawCollateralTest is BasicDeploy {
         // Try to withdraw too much collateral
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.WithdrawalExceedsCreditLimit.selector, bob, positionId, borrowAmount, newCreditLimit
+                IPROTOCOL.WithdrawalExceedsCreditLimit.selector, bob, positionId, borrowAmount, newCreditLimit
             )
         );
         LendefiInstance.withdrawCollateral(address(wethInstance), tooMuchWithdraw, positionId);
@@ -357,7 +341,7 @@ contract WithdrawCollateralTest is BasicDeploy {
         _supplyCollateral(bob, address(stableToken), stableAmount, positionId);
 
         // Check position has both assets
-        address[] memory posAssets = LendefiInstance.getPositionAssets(bob, positionId);
+        address[] memory posAssets = LendefiInstance.getPositionCollateralAssets(bob, positionId);
         assertEq(posAssets.length, 2, "Position should have 2 assets");
 
         vm.startPrank(bob);
@@ -373,7 +357,7 @@ contract WithdrawCollateralTest is BasicDeploy {
         assertEq(stableCollateral, stableAmount, "Stable collateral should remain unchanged");
 
         // Verify position assets still has both
-        posAssets = LendefiInstance.getPositionAssets(bob, positionId);
+        posAssets = LendefiInstance.getPositionCollateralAssets(bob, positionId);
         assertEq(posAssets.length, 2, "Position should still have 2 assets");
     }
 
@@ -400,7 +384,7 @@ contract WithdrawCollateralTest is BasicDeploy {
         assertEq(stableCollateral, stableAmount, "Stable collateral should remain unchanged");
 
         // Verify position assets only contains stableToken now
-        address[] memory posAssets = LendefiInstance.getPositionAssets(bob, positionId);
+        address[] memory posAssets = LendefiInstance.getPositionCollateralAssets(bob, positionId);
         assertEq(posAssets.length, 1, "Position should have 1 asset");
         assertEq(posAssets[0], address(stableToken), "Remaining asset should be stableToken");
     }
@@ -418,7 +402,7 @@ contract WithdrawCollateralTest is BasicDeploy {
         // Try to withdraw more than available
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.InsufficientCollateralBalance.selector,
+                IPROTOCOL.InsufficientCollateralBalance.selector,
                 bob,
                 positionId,
                 address(wethInstance),
@@ -439,7 +423,7 @@ contract WithdrawCollateralTest is BasicDeploy {
         uint256 invalidPositionId = 999;
         vm.startPrank(bob);
         // Try to withdraw from nonexistent position
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, bob, invalidPositionId));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, bob, invalidPositionId));
         LendefiInstance.withdrawCollateral(address(wethInstance), 1 ether, invalidPositionId);
         vm.stopPrank();
     }
@@ -494,7 +478,7 @@ contract WithdrawCollateralTest is BasicDeploy {
 
         // Bob tries to withdraw from Alice's position
         vm.startPrank(bob);
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, bob, alicePositionId));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, bob, alicePositionId));
         LendefiInstance.withdrawCollateral(address(wethInstance), 1 ether, alicePositionId);
         vm.stopPrank();
     }
@@ -592,7 +576,7 @@ contract WithdrawCollateralTest is BasicDeploy {
         assertEq(stableCollateral, stableAmount - stableWithdraw, "Stable collateral should be reduced");
 
         // Verify position assets array is correct
-        address[] memory posAssets = LendefiInstance.getPositionAssets(bob, positionId);
+        address[] memory posAssets = LendefiInstance.getPositionCollateralAssets(bob, positionId);
         uint256 expectedLength = 0;
         if (wethCollateral > 0) expectedLength++;
         if (stableCollateral > 0) expectedLength++;
