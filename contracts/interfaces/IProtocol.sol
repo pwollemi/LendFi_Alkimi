@@ -1,245 +1,610 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-/**
- * @title IPROTOCOL
- * @notice Interface for the Lendefi Protocol
- * @dev Defines the core functionality and state variables of the Lendefi lending protocol
- */
 interface IPROTOCOL is IERC20 {
+    // Enums
     /**
-     * @dev Risk categorizations for different asset types
+     * @notice Classification of collateral assets by risk profile
+     * @dev Used to determine borrowing parameters and liquidation thresholds
      */
     enum CollateralTier {
-        STABLE, // Low risk assets like USDC, DAI
-        CROSS_A, // Blue chip assets like ETH, BTC
-        CROSS_B, // Mid-tier assets with moderate risk
-        ISOLATED // High risk assets that can only be used in isolation mode
+        STABLE, // Most stable assets (e.g., stablecoins)
+        CROSS_A, // High-quality volatile assets (e.g., ETH, BTC)
+        CROSS_B, // Medium-quality volatile assets
+        ISOLATED // High-risk assets that require isolation mode
 
     }
 
     /**
-     * @dev Configuration for an asset in the protocol
+     * @notice Current status of a borrowing position
+     * @dev Used to track position lifecycle and determine valid operations
+     */
+    enum PositionStatus {
+        LIQUIDATED, // Position has been liquidated
+        ACTIVE, // Position is active and can be modified
+        CLOSED // Position has been voluntarily closed by the user
+
+    }
+
+    // Structs
+    /**
+     * @notice Configuration parameters for a collateral asset
+     * @dev Contains all settings that define how an asset behaves within the protocol
      */
     struct Asset {
-        uint8 active; // 1 if asset is active, 0 if disabled
-        uint8 decimals; // Asset token decimals
-        uint8 oracleDecimals; // Number of decimals in oracle price feed
-        uint32 borrowThreshold; // LTV ratio for borrowing (e.g. 800 = 80%)
-        uint32 liquidationThreshold; // LTV ratio for liquidation (e.g. 850 = 85%)
-        address oracleUSD; // Address of price oracle for asset/USD
-        uint256 maxSupplyThreshold; // Maximum amount of asset allowed in protocol
-        CollateralTier tier; // Risk category of the asset
-        uint256 isolationDebtCap; // Maximum debt allowed in isolation mode
+        uint8 active; // 1 = enabled, 0 = disabled
+        uint8 oracleDecimals; // Decimal precision of the price oracle (e.g., 8 for Chainlink)
+        uint8 decimals; // Decimal precision of the asset itself
+        uint32 borrowThreshold; // LTV ratio for borrowing (scaled by 1000, e.g., 800 = 80%)
+        uint32 liquidationThreshold; // LTV ratio for liquidation (scaled by 1000, e.g., 850 = 85%)
+        address oracleUSD; // Price oracle address for USD value
+        uint256 maxSupplyThreshold; // Maximum amount of asset that can be supplied as collateral
+        uint256 isolationDebtCap; // Maximum debt allowed when used in isolation mode
+        CollateralTier tier; // Risk classification of the asset
     }
 
     /**
-     * @dev Represents a user's borrowing position
+     * @notice User borrowing position data
+     * @dev Core data structure tracking user's debt and position configuration
      */
     struct UserPosition {
-        bool isIsolated; // Whether position is in isolation mode
-        address isolatedAsset; // Asset used in isolation mode (if applicable)
-        uint256 debtAmount; // Amount of USDC borrowed
-        uint256 lastInterestAccrual; // Timestamp of last interest calculation
+        bool isIsolated; // Whether position uses isolation mode
+        uint256 debtAmount; // Current debt principal without interest
+        uint256 lastInterestAccrual; // Timestamp of last interest accrual
+        PositionStatus status; // Current lifecycle status of the position
     }
 
     /**
-     * @dev Overview of protocol state
+     * @notice Global protocol state variables
+     * @dev Used for reporting and governance decisions
      */
     struct ProtocolSnapshot {
-        uint256 utilization; // Current utilization ratio
-        uint256 borrowRate; // Current base borrow rate
-        uint256 supplyRate; // Current supply rate
-        uint256 totalBorrow; // Total amount borrowed from protocol
-        uint256 totalSuppliedLiquidity; // Total base amount in protocol
-        uint256 targetReward; // Target reward amount
-        uint256 rewardInterval; // Interval for reward distribution
-        uint256 rewardableSupply; // Minimum supply to be eligible for rewards
-        uint256 baseProfitTarget; // Base profit target rate
-        uint256 liquidatorThreshold; // Minimum governance tokens required for liquidation
-        uint256 flashLoanFee; // Fee for flash loans (basis points)
+        uint256 utilization; // Current utilization ratio (scaled by WAD)
+        uint256 borrowRate; // Current borrow interest rate (scaled by RAY)
+        uint256 supplyRate; // Current supply interest rate (scaled by RAY)
+        uint256 totalBorrow; // Total outstanding borrowed amount
+        uint256 totalSuppliedLiquidity; // Total liquidity supplied to protocol
+        uint256 targetReward; // Target amount of rewards per interval
+        uint256 rewardInterval; // Time between reward distributions
+        uint256 rewardableSupply; // Minimum liquidity to qualify for rewards
+        uint256 baseProfitTarget; // Target profit rate (scaled by RAY)
+        uint256 liquidatorThreshold; // Governance token threshold for liquidators
+        uint256 flashLoanFee; // Fee charged on flash loans (scaled by 1000)
     }
 
     // Events
-    event FlashLoan(address indexed initiator, address indexed receiver, address token, uint256 amount, uint256 fee);
-    event Reward(address indexed to, uint256 amount);
-    event Exchange(address indexed src, uint256 amountIn, uint256 amountOut);
-    event Initialized(address indexed src);
+    /**
+     * @notice Emitted when protocol is initialized
+     * @param admin Address of the admin who initialized the contract
+     */
+    event Initialized(address indexed admin);
+
+    /**
+     * @notice Emitted when implementation contract is upgraded
+     * @param admin Address of the admin who performed the upgrade
+     * @param implementation Address of the new implementation
+     */
+    event Upgrade(address indexed admin, address indexed implementation);
+
+    /**
+     * @notice Emitted when a user supplies liquidity to the protocol
+     * @param supplier Address of the liquidity supplier
+     * @param amount Amount of USDC supplied
+     */
+    event SupplyLiquidity(address indexed supplier, uint256 amount);
+
+    /**
+     * @notice Emitted when LP tokens are exchanged for underlying assets
+     * @param exchanger Address of the user exchanging tokens
+     * @param amount Amount of LP tokens exchanged
+     * @param value Value received in exchange
+     */
+    event Exchange(address indexed exchanger, uint256 amount, uint256 value);
+
+    /**
+     * @notice Emitted when collateral is supplied to a position
+     * @param user Address of the position owner
+     * @param positionId ID of the position
+     * @param asset Address of the supplied collateral asset
+     * @param amount Amount of collateral supplied
+     */
     event SupplyCollateral(address indexed user, uint256 indexed positionId, address indexed asset, uint256 amount);
+
+    /**
+     * @notice Emitted when collateral is withdrawn from a position
+     * @param user Address of the position owner
+     * @param positionId ID of the position
+     * @param asset Address of the withdrawn collateral asset
+     * @param amount Amount of collateral withdrawn
+     */
     event WithdrawCollateral(address indexed user, uint256 indexed positionId, address indexed asset, uint256 amount);
-    event Borrow(address indexed user, uint256 indexed positionId, uint256 amount);
-    event Liquidated(address indexed user, uint256 indexed positionId, uint256 amount);
-    event EnteredIsolationMode(address indexed user, uint256 indexed positionId, address indexed asset);
-    event ExitedIsolationMode(address indexed user, uint256 indexed positionId);
-    event TierParametersUpdated(CollateralTier indexed tier, uint256 borrowRate, uint256 liquidationBonus);
-    event AssetTierUpdated(address indexed asset, CollateralTier tier);
-    event UpdateAssetConfig(address indexed asset);
-    event Upgrade(address indexed src, address indexed implementation);
-    event Repay(address indexed user, uint256 indexed positionId, uint256 amount);
-    event PositionClosed(address indexed user, uint256 indexed positionId);
-    event SupplyLiquidity(address indexed user, uint256 amount);
+
+    /**
+     * @notice Emitted when a new borrowing position is created
+     * @param user Address of the position owner
+     * @param positionId ID of the newly created position
+     * @param isIsolated Whether the position was created in isolation mode
+     */
     event PositionCreated(address indexed user, uint256 indexed positionId, bool isIsolated);
+
+    /**
+     * @notice Emitted when a position is closed
+     * @param user Address of the position owner
+     * @param positionId ID of the closed position
+     */
+    event PositionClosed(address indexed user, uint256 indexed positionId);
+
+    /**
+     * @notice Emitted when a user borrows from a position
+     * @param user Address of the position owner
+     * @param positionId ID of the position
+     * @param amount Amount borrowed
+     */
+    event Borrow(address indexed user, uint256 indexed positionId, uint256 amount);
+
+    /**
+     * @notice Emitted when debt is repaid
+     * @param user Address of the position owner
+     * @param positionId ID of the position
+     * @param amount Amount repaid
+     */
+    event Repay(address indexed user, uint256 indexed positionId, uint256 amount);
+
+    /**
+     * @notice Emitted when interest is accrued on a position
+     * @param user Address of the position owner
+     * @param positionId ID of the position
+     * @param amount Interest amount accrued
+     */
+    event InterestAccrued(address indexed user, uint256 indexed positionId, uint256 amount);
+
+    /**
+     * @notice Emitted when a position is liquidated
+     * @param user Address of the position owner
+     * @param positionId ID of the liquidated position
+     * @param amount Debt amount liquidated
+     */
+    event Liquidated(address indexed user, uint256 indexed positionId, uint256 amount);
+
+    /**
+     * @notice Emitted when rewards are distributed
+     * @param user Address of the reward recipient
+     * @param amount Reward amount distributed
+     */
+    event Reward(address indexed user, uint256 amount);
+
+    /**
+     * @notice Emitted when a flash loan is executed
+     * @param initiator Address that initiated the flash loan
+     * @param receiver Contract receiving the flash loan
+     * @param token Address of the borrowed token
+     * @param amount Amount borrowed
+     * @param fee Fee charged for the flash loan
+     */
+    event FlashLoan(
+        address indexed initiator, address indexed receiver, address indexed token, uint256 amount, uint256 fee
+    );
+
+    /**
+     * @notice Emitted when the base profit target is updated
+     * @param rate New base profit target rate
+     */
     event UpdateBaseProfitTarget(uint256 rate);
+
+    /**
+     * @notice Emitted when the base borrow rate is updated
+     * @param rate New base borrow rate
+     */
     event UpdateBaseBorrowRate(uint256 rate);
+
+    /**
+     * @notice Emitted when the target reward amount is updated
+     * @param amount New target reward amount
+     */
     event UpdateTargetReward(uint256 amount);
+
+    /**
+     * @notice Emitted when the reward interval is updated
+     * @param interval New reward interval in seconds
+     */
     event UpdateRewardInterval(uint256 interval);
+
+    /**
+     * @notice Emitted when the rewardable supply threshold is updated
+     * @param amount New rewardable supply threshold
+     */
     event UpdateRewardableSupply(uint256 amount);
+
+    /**
+     * @notice Emitted when the liquidator governance token threshold is updated
+     * @param amount New liquidator threshold
+     */
     event UpdateLiquidatorThreshold(uint256 amount);
-    event UtilizationUpdated(uint256 newUtilization);
-    event SupplyRateUpdated(uint256 newRate);
-    event CollateralValueChanged(address user, uint256 positionId, uint256 newValue);
-    event InterestAccrued(address indexed user, uint256 indexed positionId, uint256 interestAccrued);
-    event TVLUpdated(address indexed asset, uint256 newTVL);
-    event UpdateFlashLoanFee(uint256 newFee);
-
-    // ------------ Core User Functions ------------
 
     /**
-     * @notice Creates a new borrowing position
-     * @param asset The initial collateral asset type for the position
-     * @param isIsolated Whether the position should use isolation mode
-     * @dev Initializes a new position that can hold collateral and debt
+     * @notice Emitted when the flash loan fee is updated
+     * @param fee New flash loan fee (scaled by 1000)
      */
-    function createPosition(address asset, bool isIsolated) external;
+    event UpdateFlashLoanFee(uint256 fee);
 
     /**
-     * @notice Adds collateral to a position
-     * @param asset The collateral asset to supply
-     * @param amount The amount of the asset to supply
-     * @param positionId The ID of the position to add collateral to
-     * @dev The user must have approved the contract to transfer the asset
+     * @notice Emitted when tier parameters are updated
+     * @param tier Collateral tier being updated
+     * @param borrowRate New borrow rate for the tier
+     * @param liquidationBonus New liquidation bonus for the tier
      */
-    function supplyCollateral(address asset, uint256 amount, uint256 positionId) external;
+    event TierParametersUpdated(CollateralTier tier, uint256 borrowRate, uint256 liquidationBonus);
 
     /**
-     * @notice Withdraws collateral from a position
-     * @param asset The collateral asset to withdraw
-     * @param amount The amount of the asset to withdraw
-     * @param positionId The ID of the position to withdraw from
-     * @dev The withdrawal must not cause the position to become undercollateralized
+     * @notice Emitted when an asset's tier classification is updated
+     * @param asset Address of the asset being updated
+     * @param newTier New collateral tier assigned to the asset
      */
-    function withdrawCollateral(address asset, uint256 amount, uint256 positionId) external;
+    event AssetTierUpdated(address indexed asset, CollateralTier indexed newTier);
 
     /**
-     * @notice Borrow USDC against a position's collateral
-     * @param positionId The ID of the position to borrow against
-     * @param amount The amount of USDC to borrow
-     * @dev The borrow must not exceed the position's credit limit
+     * @notice Emitted when an asset's configuration is updated
+     * @param asset Address of the updated asset
      */
-    function borrow(uint256 positionId, uint256 amount) external;
+    event UpdateAssetConfig(address indexed asset);
 
     /**
-     * @notice Liquidates an undercollateralized position
-     * @param user The owner of the position to liquidate
-     * @param positionId The ID of the position to liquidate
-     * @dev Liquidator must have sufficient governance tokens
+     * @notice Emitted when an asset's TVL is updated
+     * @param asset Address of the asset
+     * @param amount New TVL amount
      */
-    function liquidate(address user, uint256 positionId) external;
+    event TVLUpdated(address indexed asset, uint256 amount);
 
     /**
-     * @notice Repays part or all of a position's debt
-     * @param positionId The ID of the position to repay
-     * @param amount The amount of USDC to repay
-     * @dev Repays interest first, then principal
+     * @notice Thrown when a position ID is invalid for a user
+     * @param user The address of the position owner
+     * @param positionId The invalid position ID
      */
-    function repay(uint256 positionId, uint256 amount) external;
+    error InvalidPosition(address user, uint256 positionId);
 
     /**
-     * @notice Closes a position and withdraws all collateral after repaying any debt
-     * @param positionId The ID of the position to exit
-     * @dev All debt must be repaid before position can be closed
+     * @notice Thrown when a liquidator has insufficient governance tokens
+     * @param liquidator The address attempting to liquidate
+     * @param required The required amount of governance tokens
+     * @param balance The liquidator's actual balance
      */
-    function exitPosition(uint256 positionId) external;
+    error InsufficientGovTokens(address liquidator, uint256 required, uint256 balance);
 
     /**
-     * @notice Supplies USDC liquidity to the protocol and receives LP tokens
-     * @param amount The amount of USDC to supply
-     * @dev Mints LYT tokens representing share of the lending pool
+     * @notice Thrown when attempting to liquidate a healthy position
+     * @param user The address of the position owner
+     * @param positionId The ID of the position that can't be liquidated
      */
-    function supplyLiquidity(uint256 amount) external;
+    error NotLiquidatable(address user, uint256 positionId);
 
     /**
-     * @notice Exchanges LP tokens for underlying USDC
-     * @param amount The amount of LP tokens to exchange
-     * @dev Burns LYT tokens and returns USDC plus accrued interest
+     * @notice Thrown when there's insufficient liquidity for a flash loan
+     * @param token The address of the requested token
+     * @param requested The amount requested
+     * @param available The actual available liquidity
      */
-    function exchange(uint256 amount) external;
+    error InsufficientFlashLoanLiquidity(address token, uint256 requested, uint256 available);
 
     /**
-     * @notice Executes a flash loan
-     * @param receiver The contract that will receive the flash loan
-     * @param token The token to flash loan (currently only USDC)
-     * @param amount The amount to flash loan
-     * @param params Additional data to pass to the receiver
+     * @notice Thrown when a flash loan execution fails
+     */
+    error FlashLoanFailed();
+
+    /**
+     * @notice Thrown when flash loan funds aren't fully returned with fees
+     * @param expected The expected amount to be returned
+     * @param actual The actual amount returned
+     */
+    error FlashLoanFundsNotReturned(uint256 expected, uint256 actual);
+
+    /**
+     * @notice Thrown when attempting flash loan with unsupported token
+     * @param token The address of the unsupported token
+     */
+    error OnlyUsdcSupported(address token);
+
+    /**
+     * @notice Thrown when attempting to set a fee higher than allowed
+     * @param requested The requested fee
+     * @param max The maximum allowed fee
+     */
+    error FeeTooHigh(uint256 requested, uint256 max);
+
+    /**
+     * @notice Thrown when a user has insufficient token balance
+     * @param token The address of the token
+     * @param user The address of the user
+     * @param available The user's actual balance
+     */
+    error InsufficientTokenBalance(address token, address user, uint256 available);
+
+    /**
+     * @notice Thrown when attempting to use an asset not listed in the protocol
+     * @param asset The address of the unlisted asset
+     */
+    error AssetNotListed(address asset);
+
+    /**
+     * @notice Thrown when protocol has insufficient liquidity for borrowing
+     * @param requested The requested amount
+     * @param available The actual available liquidity
+     */
+    error InsufficientLiquidity(uint256 requested, uint256 available);
+
+    /**
+     * @notice Thrown when attempting to exceed isolation debt cap
+     * @param asset The isolated asset address
+     * @param requested The requested debt amount
+     * @param cap The maximum allowed debt in isolation mode
+     */
+    error IsolationDebtCapExceeded(address asset, uint256 requested, uint256 cap);
+
+    /**
+     * @notice Thrown when no collateral is provided for isolated asset
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @param isolatedAsset The address of the isolated asset
+     */
+    error NoIsolatedCollateral(address user, uint256 positionId, address isolatedAsset);
+
+    /**
+     * @notice Thrown when attempting to borrow beyond credit limit
+     * @param requested The requested borrow amount
+     * @param creditLimit The maximum allowed borrow amount
+     */
+    error ExceedsCreditLimit(uint256 requested, uint256 creditLimit);
+
+    /**
+     * @notice Thrown when attempting to repay a position with no debt
+     * @param user The address of the position owner
+     * @param positionId The ID of the position with no debt
+     */
+    error NoDebtToRepay(address user, uint256 positionId);
+
+    /**
+     * @notice Thrown when asset doesn't match isolation mode settings
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @param requestedAsset The asset being added/withdrawn
+     * @param isolatedAsset The current isolated asset
+     */
+    error InvalidPositionAsset(address user, uint256 positionId, address requestedAsset, address isolatedAsset);
+
+    /**
+     * @notice Thrown when user has insufficient collateral in position
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @param asset The address of the collateral asset
+     * @param requested The requested withdrawal amount
+     * @param available The actual available collateral
+     */
+    error InsufficientCollateralBalance(
+        address user, uint256 positionId, address asset, uint256 requested, uint256 available
+    );
+
+    /**
+     * @notice Thrown when withdrawal would make position undercollateralized
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @param debtAmount The position's current debt
+     * @param creditLimit The position's new credit limit after withdrawal
+     */
+    error WithdrawalExceedsCreditLimit(address user, uint256 positionId, uint256 debtAmount, uint256 creditLimit);
+
+    /**
+     * @notice Thrown when attempting to use a disabled asset
+     * @param asset The address of the disabled asset
+     */
+    error AssetDisabled(address asset);
+
+    /**
+     * @notice Thrown when attempting to use asset that requires isolation mode
+     * @param asset The address of the asset that requires isolation
+     */
+    error IsolationModeRequired(address asset);
+
+    /**
+     * @notice Thrown when attempting to exceed asset supply cap
+     * @param asset The address of the asset
+     * @param requested The requested supply amount
+     * @param cap The maximum allowed supply
+     */
+    error SupplyCapExceeded(address asset, uint256 requested, uint256 cap);
+
+    /**
+     * @notice Thrown when oracle returns invalid price data
+     * @param oracle The address of the price oracle
+     * @param price The invalid price value
+     */
+    error OracleInvalidPrice(address oracle, int256 price);
+
+    /**
+     * @notice Thrown when oracle round is incomplete
+     * @param oracle The address of the price oracle
+     * @param roundId The current round ID
+     * @param answeredInRound The round when answer was computed
+     */
+    error OracleStalePrice(address oracle, uint80 roundId, uint80 answeredInRound);
+
+    /**
+     * @notice Thrown when oracle data is too old
+     * @param oracle The address of the price oracle
+     * @param timestamp The timestamp of the oracle data
+     * @param currentTimestamp The current block timestamp
+     * @param maxAge The maximum allowed age for oracle data
+     */
+    error OracleTimeout(address oracle, uint256 timestamp, uint256 currentTimestamp, uint256 maxAge);
+
+    /**
+     * @notice Thrown when price has excessive volatility with stale data
+     * @param oracle The address of the price oracle
+     * @param price The current price
+     * @param volatility The calculated price change percentage
+     */
+    error OracleInvalidPriceVolatility(address oracle, int256 price, uint256 volatility);
+    /// @notice Thrown when trying to add more than 20 different assets to a position
+    /// @param user The position owner
+    /// @param positionId The position ID
+    error TooManyAssets(address user, uint256 positionId);
+    /// @notice Thrown when trying to set a rate below minimum allowed
+    /// @param requested The requested rate
+    /// @param minimum The minimum allowed rate
+    error RateTooLow(uint256 requested, uint256 minimum);
+    error RewardTooHigh(uint256 requested, uint256 max);
+    /// @notice Thrown when trying to set a reward interval below minimum allowed
+    /// @param requested The requested interval in seconds
+    /// @param minimum The minimum allowed interval in seconds
+    error RewardIntervalTooShort(uint256 requested, uint256 minimum);
+    /// @notice Thrown when trying to set rewardable supply below minimum allowed
+    /// @param requested The requested supply amount
+    /// @param minimum The minimum allowed supply amount
+    error RewardableSupplyTooLow(uint256 requested, uint256 minimum);
+    /// @notice Thrown when trying to set liquidator threshold below minimum allowed
+    /// @param requested The requested threshold amount
+    /// @param minimum The minimum allowed threshold amount
+    error LiquidatorThresholdTooLow(uint256 requested, uint256 minimum);
+    /// @notice Thrown when trying to set a rate above maximum allowed
+    /// @param requested The requested rate
+    /// @param maximum The maximum allowed rate
+    error RateTooHigh(uint256 requested, uint256 maximum);
+
+    /// @notice Thrown when trying to set a bonus above maximum allowed
+    /// @param requested The requested bonus
+    /// @param maximum The maximum allowed bonus
+    error BonusTooHigh(uint256 requested, uint256 maximum);
+    /**
+     * @notice Thrown when attempting to interact with an inactive position
+     * @param user The address of the position owner
+     * @param positionId The ID of the inactive position
+     */
+    error InactivePosition(address user, uint256 positionId);
+
+    // Core functions
+
+    /**
+     * @notice Initializes the protocol with core contract addresses
+     * @param usdc The address of the USDC stablecoin used for protocol operations
+     * @param govToken The address of the governance token
+     * @param ecosystem The address of the ecosystem contract
+     * @param treasury_ The address of the treasury contract
+     * @param timelock_ The address of the timelock contract for governance
+     * @param guardian The address of the protocol guardian with emergency powers
+     * @dev Can only be called once during contract deployment
+     */
+    function initialize(
+        address usdc,
+        address govToken,
+        address ecosystem,
+        address treasury_,
+        address timelock_,
+        address guardian
+    ) external;
+
+    /**
+     * @notice Pauses all protocol operations in case of emergency
+     * @dev Can only be called by authorized governance roles
+     */
+    function pause() external;
+
+    /**
+     * @notice Unpauses the protocol to resume normal operations
+     * @dev Can only be called by authorized governance roles
+     */
+    function unpause() external;
+
+    // Flash loan function
+    /**
+     * @notice Executes a flash loan, allowing borrowing without collateral if repaid in same transaction
+     * @param receiver The contract address that will receive the flash loaned tokens
+     * @param token The address of the token to borrow (currently only supports USDC)
+     * @param amount The amount of tokens to flash loan
+     * @param params Arbitrary data to pass to the receiver contract
      * @dev Receiver must implement IFlashLoanReceiver interface
      */
     function flashLoan(address receiver, address token, uint256 amount, bytes calldata params) external;
 
-    // ------------ Admin Functions ------------
-
+    // Configuration functions
     /**
-     * @notice Updates the base profit target rate
-     * @param rate The new base profit target rate (scaled by 1e6)
-     * @dev Minimum allowed rate is 0.25%
-     */
-    function updateBaseProfitTarget(uint256 rate) external;
-
-    /**
-     * @notice Updates the base borrow rate
-     * @param rate The new base borrow rate (scaled by 1e6)
-     * @dev Minimum allowed rate is 1%
-     */
-    function updateBaseBorrowRate(uint256 rate) external;
-
-    /**
-     * @notice Updates the target reward amount
-     * @param amount The new target reward amount
-     * @dev Used for LP reward calculations
-     */
-    function updateTargetReward(uint256 amount) external;
-
-    /**
-     * @notice Updates the reward interval
-     * @param interval The new reward interval in seconds
-     * @dev Minimum allowed interval is 90 days
-     */
-    function updateRewardInterval(uint256 interval) external;
-
-    /**
-     * @notice Updates the minimum supply required to be eligible for rewards
-     * @param amount The new minimum supply amount
-     * @dev Minimum allowed value is 20,000 WAD
-     */
-    function updateRewardableSupply(uint256 amount) external;
-
-    /**
-     * @notice Updates the minimum governance tokens required to perform liquidations
-     * @param amount The new liquidator threshold
-     * @dev Minimum allowed value is 10 tokens
-     */
-    function updateLiquidatorThreshold(uint256 amount) external;
-
-    /**
-     * @notice Updates the flash loan fee
-     * @param newFee The new fee in basis points (1 = 0.01%)
-     * @dev Maximum allowed fee is 1% (100 basis points)
+     * @notice Updates the fee charged for flash loans
+     * @param newFee The new flash loan fee (scaled by 1000, e.g., 5 = 0.5%)
+     * @dev Can only be called by authorized governance roles
      */
     function updateFlashLoanFee(uint256 newFee) external;
 
     /**
-     * @notice Updates the configuration for an asset
-     * @param asset Address of the asset to configure
-     * @param oracle_ Address of the price oracle
-     * @param oracleDecimals Number of decimals in the oracle price feed
-     * @param assetDecimals Number of decimals in the asset token
+     * @notice Updates the target profit rate for the protocol
+     * @param rate The new base profit target rate (scaled by RAY)
+     * @dev Can only be called by authorized governance roles
+     */
+    function updateBaseProfitTarget(uint256 rate) external;
+
+    /**
+     * @notice Updates the base interest rate charged on borrowing
+     * @param rate The new base borrow rate (scaled by RAY)
+     * @dev Can only be called by authorized governance roles
+     */
+    function updateBaseBorrowRate(uint256 rate) external;
+
+    /**
+     * @notice Updates the target reward amount for liquidity providers
+     * @param amount The new target reward amount per distribution interval
+     * @dev Can only be called by authorized governance roles
+     */
+    function updateTargetReward(uint256 amount) external;
+
+    /**
+     * @notice Updates the time interval between reward distributions
+     * @param interval The new reward interval in seconds
+     * @dev Can only be called by authorized governance roles
+     */
+    function updateRewardInterval(uint256 interval) external;
+
+    /**
+     * @notice Updates the minimum liquidity threshold required to be eligible for rewards
+     * @param amount The new minimum liquidity threshold
+     * @dev Can only be called by authorized governance roles
+     */
+    function updateRewardableSupply(uint256 amount) external;
+
+    /**
+     * @notice Updates the minimum governance token threshold required to be a liquidator
+     * @param amount The new liquidator threshold amount
+     * @dev Can only be called by authorized governance roles
+     */
+    function updateLiquidatorThreshold(uint256 amount) external;
+
+    /**
+     * @notice Updates the borrowing rate and liquidation bonus parameters for a collateral tier
+     * @param tier The collateral tier to update
+     * @param borrowRate The new borrow rate multiplier (scaled by RAY)
+     * @param liquidationBonus The new liquidation bonus percentage (scaled by 1000)
+     * @dev Can only be called by authorized governance roles
+     */
+    function updateTierParameters(CollateralTier tier, uint256 borrowRate, uint256 liquidationBonus) external;
+
+    /**
+     * @notice Updates the risk classification tier of an asset
+     * @param asset The address of the asset to update
+     * @param newTier The new collateral tier to assign to the asset
+     * @dev Can only be called by authorized governance roles
+     */
+    function updateAssetTier(address asset, CollateralTier newTier) external;
+
+    /**
+     * @notice Updates or adds a new collateral asset with all configuration parameters
+     * @param asset The address of the asset to configure
+     * @param oracle_ The address of the price oracle for this asset
+     * @param oracleDecimals The decimal precision of the price oracle
+     * @param assetDecimals The decimal precision of the asset token
      * @param active Whether the asset is active (1) or disabled (0)
-     * @param borrowThreshold LTV ratio for borrowing (e.g. 800 = 80%)
-     * @param liquidationThreshold LTV ratio for liquidation (e.g. 850 = 85%)
-     * @param maxSupplyLimit Maximum amount of this asset allowed in protocol
-     * @param tier Risk category of the asset
-     * @param isolationDebtCap Maximum debt allowed when used in isolation mode
+     * @param borrowThreshold The LTV ratio for borrowing (scaled by 1000)
+     * @param liquidationThreshold The LTV ratio for liquidation (scaled by 1000)
+     * @param maxSupplyLimit The maximum amount that can be supplied as collateral
+     * @param tier The risk classification tier of the asset
+     * @param isolationDebtCap The maximum debt allowed when used in isolation mode
+     * @dev Can only be called by authorized governance roles
      */
     function updateAssetConfig(
         address asset,
@@ -254,272 +619,167 @@ interface IPROTOCOL is IERC20 {
         uint256 isolationDebtCap
     ) external;
 
+    // Position management functions
     /**
-     * @notice Updates the risk parameters for a collateral tier
-     * @param tier The tier to update
-     * @param borrowRate The new base borrow rate for the tier
-     * @param liquidationBonus The new liquidation bonus for the tier
-     * @dev Maximum allowed rate is 25%, maximum bonus is 20%
+     * @notice Allows users to supply liquidity (USDC) to the protocol
+     * @param amount The amount of USDC to supply
+     * @dev Mints LP tokens representing the user's share of the liquidity pool
      */
-    function updateTierParameters(CollateralTier tier, uint256 borrowRate, uint256 liquidationBonus) external;
+    function supplyLiquidity(uint256 amount) external;
 
     /**
-     * @notice Updates the risk tier of an asset
-     * @param asset The asset to update
-     * @param newTier The new tier to assign to the asset
-     * @dev Asset must already be listed in the protocol
+     * @notice Allows users to withdraw liquidity by burning LP tokens
+     * @param amount The amount of LP tokens to burn
      */
-    function updateAssetTier(address asset, CollateralTier newTier) external;
+    function exchange(uint256 amount) external;
 
     /**
-     * @notice Pauses protocol operations
-     * @dev Can only be called by addresses with PAUSER_ROLE
+     * @notice Allows users to supply collateral assets to a borrowing position
+     * @param asset The address of the collateral asset to supply
+     * @param amount The amount of the asset to supply
+     * @param positionId The ID of the position to supply collateral to
      */
-    function pause() external;
+    function supplyCollateral(address asset, uint256 amount, uint256 positionId) external;
 
     /**
-     * @notice Unpauses protocol operations
-     * @dev Can only be called by addresses with PAUSER_ROLE
+     * @notice Allows users to withdraw collateral assets from a borrowing position
+     * @param asset The address of the collateral asset to withdraw
+     * @param amount The amount of the asset to withdraw
+     * @param positionId The ID of the position to withdraw from
+     * @dev Will revert if withdrawal would make position undercollateralized
      */
-    function unpause() external;
-
-    // ------------ View Functions: Protocol State ------------
+    function withdrawCollateral(address asset, uint256 amount, uint256 positionId) external;
 
     /**
-     * @notice Returns a snapshot of the protocol's current state
-     * @return A struct containing key protocol metrics
-     * @dev Aggregates various protocol metrics into a single struct
+     * @notice Creates a new borrowing position for the caller
+     * @param asset The address of the initial collateral asset
+     * @param isIsolated Whether to create the position in isolation mode
      */
-    function getProtocolSnapshot() external view returns (ProtocolSnapshot memory);
+    function createPosition(address asset, bool isIsolated) external;
 
     /**
-     * @notice Returns tier-specific interest rates and liquidation bonuses
-     * @return borrowRates Array of borrow rates for each tier
-     * @return liquidationBonuses Array of liquidation bonuses for each tier
-     * @dev Returns rates for all tiers in a single call
+     * @notice Allows borrowing stablecoins against collateral in a position
+     * @param positionId The ID of the position to borrow against
+     * @param amount The amount of stablecoins to borrow
+     * @dev Will revert if borrowing would exceed the position's credit limit
      */
-    function getTierRates()
-        external
-        view
-        returns (uint256[4] memory borrowRates, uint256[4] memory liquidationBonuses);
+    function borrow(uint256 positionId, uint256 amount) external;
 
     /**
-     * @notice Returns information about a liquidity provider
-     * @param user The address of the liquidity provider
-     * @return lpTokenBalance The user's LP token balance
-     * @return usdcValue The USDC value of the user's LP tokens
-     * @return lastAccrualTime The timestamp of the last reward accrual
-     * @return isRewardEligible Whether the user is eligible for rewards
-     * @return pendingRewards The amount of pending rewards
-     * @dev Calculates current LP token value and reward eligibility
+     * @notice Allows users to repay debt on a borrowing position
+     * @param positionId The ID of the position to repay debt for
+     * @param amount The amount of debt to repay
      */
-    function getLPInfo(address user)
-        external
-        view
-        returns (
-            uint256 lpTokenBalance,
-            uint256 usdcValue,
-            uint256 lastAccrualTime,
-            bool isRewardEligible,
-            uint256 pendingRewards
-        );
+    function repay(uint256 positionId, uint256 amount) external;
 
     /**
-     * @notice Returns the current utilization ratio of the protocol
-     * @return The utilization ratio scaled by 1e18
-     * @dev Calculated as totalBorrow / totalSuppliedLiquidity
+     * @notice Closes a position after all debt is repaid and withdraws remaining collateral
+     * @param positionId The ID of the position to close
+     * @dev Position must have zero debt to be closed
      */
-    function getUtilization() external view returns (uint256);
+    function exitPosition(uint256 positionId) external;
 
     /**
-     * @notice Returns the current supply interest rate
-     * @return The supply rate scaled by 1e18
-     * @dev Based on protocol profit and utilization
+     * @notice Liquidates an undercollateralized position
+     * @param user The address of the position owner
+     * @param positionId The ID of the position to liquidate
+     * @dev Caller must hold sufficient governance tokens to be eligible as a liquidator
      */
-    function getSupplyRate() external view returns (uint256);
+    function liquidate(address user, uint256 positionId) external;
 
+    // View functions - Asset & Position information
     /**
-     * @notice Returns the borrow interest rate for a specific collateral tier
-     * @param tier The collateral tier to query
-     * @return The borrow rate for the tier scaled by 1e18
-     * @dev Includes tier-specific premium over base rate
-     */
-    function getBorrowRate(CollateralTier tier) external view returns (uint256);
-
-    /**
-     * @notice Returns the liquidation bonus percentage for a position
-     * @param user The owner of the position
-     * @param positionId The ID of the position
-     * @return The liquidation bonus percentage scaled by 1e18
-     * @dev Based on the position's collateral tier
-     */
-    function getPositionLiquidationFee(address user, uint256 positionId) external view returns (uint256);
-
-    /**
-     * @notice Returns the base liquidation fee percentage for a tier
-     * @param tier The collateral tier to query
-     * @return The base liquidation fee percentage for the specified tier
-     * @dev Direct accessor for tierLiquidationBonus mapping
-     */
-    function getTierLiquidationFee(CollateralTier tier) external view returns (uint256);
-
-    /**
-     * @notice Returns all currently supported assets in the protocol
-     * @return An array of asset addresses
-     * @dev Assets that have been listed in the protocol
-     */
-    function getListedAssets() external view returns (address[] memory);
-
-    // ------------ View Functions: Position Information ------------
-
-    /**
-     * @notice Returns detailed information about a user position
-     * @param user The owner of the position
-     * @param positionId The ID of the position
-     * @return The position struct containing position details
-     * @dev Returns the raw position struct data
-     */
-    function getUserPosition(address user, uint256 positionId) external view returns (UserPosition memory);
-
-    /**
-     * @notice Returns the amount of a specific collateral in a position
-     * @param user The owner of the position
-     * @param positionId The ID of the position
-     * @param asset The collateral asset to query
-     * @return The amount of the asset in the position
-     * @dev Raw amount without any price calculations
-     */
-    function getUserCollateralAmount(address user, uint256 positionId, address asset) external view returns (uint256);
-
-    /**
-     * @notice Returns all positions for a user
-     * @param user The address to query positions for
-     * @return An array of user positions
-     * @dev Returns the entire positions array for the user
-     */
-    function getUserPositions(address user) external view returns (UserPosition[] memory);
-
-    /**
-     * @notice Returns the number of positions a user has
-     * @param user The address to query
-     * @return The number of positions
-     * @dev Count of positions in the user's array
-     */
-    function getUserPositionsCount(address user) external view returns (uint256);
-
-    /**
-     * @notice Returns all assets in a position
-     * @param user The owner of the position
-     * @param positionId The ID of the position
-     * @return An array of asset addresses in the position
-     * @dev List of all assets used as collateral in the position
-     */
-    function getPositionAssets(address user, uint256 positionId) external view returns (address[] memory);
-
-    /**
-     * @notice Returns the current debt of a position excluding interest
-     * @param user The owner of the position
-     * @param positionId The ID of the position
-     * @return The raw debt amount in USDC
-     * @dev Returns only principal without accrued interest
-     */
-    function getPositionDebt(address user, uint256 positionId) external view returns (uint256);
-
-    /**
-     * @notice Calculates the total debt with accrued interest for a position
-     * @param user The owner of the position
-     * @param positionId The ID of the position
-     * @return The debt amount with interest in USDC
-     * @dev Includes interest accrued since last update
-     */
-    function calculateDebtWithInterest(address user, uint256 positionId) external view returns (uint256);
-
-    /**
-     * @notice Calculates the available credit limit for a position
-     * @param user The owner of the position
-     * @param positionId The ID of the position
-     * @return The maximum borrowable amount in USDC
-     * @dev Based on collateral value and borrowing thresholds
-     */
-    function calculateCreditLimit(address user, uint256 positionId) external view returns (uint256);
-
-    /**
-     * @notice Calculates the health factor of a position
-     * @param user The owner of the position
-     * @param positionId The ID of the position
-     * @return The health factor (scaled by 1e18, >1 is healthy)
-     * @dev Higher values indicate a safer position
-     */
-    function healthFactor(address user, uint256 positionId) external view returns (uint256);
-
-    /**
-     * @notice Checks if a position is eligible for liquidation
-     * @param user The owner of the position
-     * @param positionId The ID of the position
-     * @return Whether the position can be liquidated
-     * @dev Position is liquidatable if health factor falls below 1
-     */
-    function isLiquidatable(address user, uint256 positionId) external view returns (bool);
-
-    /**
-     * @notice Returns a summary of a position's state
-     * @param user The owner of the position
-     * @param positionId The ID of the position
-     * @return totalCollateralValue The total value of collateral in the position
-     * @return currentDebt The current debt including interest
-     * @return availableCredit The available credit to borrow
-     * @return isIsolated Whether the position is in isolation mode
-     * @return isolatedAsset The isolated asset (if applicable)
-     * @dev Provides a complete overview of the position's status
-     */
-    function getPositionSummary(address user, uint256 positionId)
-        external
-        view
-        returns (
-            uint256 totalCollateralValue,
-            uint256 currentDebt,
-            uint256 availableCredit,
-            bool isIsolated,
-            address isolatedAsset
-        );
-
-    /**
-     * @notice Returns the highest risk tier among a position's collateral assets
-     * @param user The owner of the position
-     * @param positionId The ID of the position
-     * @return The highest risk tier in the position
-     * @dev Used to determine applicable interest rates
-     */
-    function getHighestTier(address user, uint256 positionId) external view returns (CollateralTier);
-
-    // ------------ View Functions: Asset Information ------------
-
-    /**
-     * @notice Returns the configuration for an asset
-     * @param asset The asset address to query
-     * @return The asset configuration
-     * @dev Complete configuration struct for the asset
+     * @notice Retrieves the configuration data for a collateral asset
+     * @param asset The address of the asset
+     * @return Asset struct containing all configuration parameters
      */
     function getAssetInfo(address asset) external view returns (Asset memory);
 
     /**
-     * @notice Returns the current USD price of an asset
-     * @param asset The asset address to query
-     * @return The price in USD (scaled by oracle decimals)
-     * @dev Fetches price from Chainlink oracle
+     * @notice Gets the current USD price of an asset
+     * @param asset The address of the asset
+     * @return The asset price in USD (scaled by the asset's oracle decimals)
      */
     function getAssetPrice(address asset) external view returns (uint256);
 
     /**
-     * @notice Returns detailed information about an asset
-     * @param asset The asset address to query
-     * @return price The current USD price (scaled by oracle decimals)
-     * @return totalSupplied The total amount supplied to the protocol
+     * @notice Gets the total number of positions created by a user
+     * @param user The address of the user
+     * @return The number of positions the user has created
+     */
+    function getUserPositionsCount(address user) external view returns (uint256);
+
+    /**
+     * @notice Gets all positions created by a user
+     * @param user The address of the user
+     * @return An array of UserPosition structs
+     */
+    function getUserPositions(address user) external view returns (UserPosition[] memory);
+
+    /**
+     * @notice Gets a specific position's data
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @return UserPosition struct containing position data
+     */
+    function getUserPosition(address user, uint256 positionId) external view returns (UserPosition memory);
+
+    /**
+     * @notice Gets the amount of a specific asset in a position
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @param asset The address of the collateral asset
+     * @return The amount of the asset in the position
+     */
+    function getUserCollateralAmount(address user, uint256 positionId, address asset) external view returns (uint256);
+
+    /**
+     * @notice Gets the current state of all protocol parameters
+     * @return ProtocolSnapshot struct with current protocol state
+     */
+    function getProtocolSnapshot() external view returns (ProtocolSnapshot memory);
+
+    /**
+     * @notice Calculates the current debt amount including accrued interest
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @return The total debt amount with interest
+     */
+    function calculateDebtWithInterest(address user, uint256 positionId) external view returns (uint256);
+
+    /**
+     * @notice Calculates the liquidation fee for a position
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @return The liquidation fee amount
+     */
+    function getPositionLiquidationFee(address user, uint256 positionId) external view returns (uint256);
+
+    /**
+     * @notice Calculates the maximum amount a user can borrow against their position
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @return The maximum borrowing capacity (credit limit)
+     */
+    function calculateCreditLimit(address user, uint256 positionId) external view returns (uint256);
+
+    /**
+     * @notice Checks if a position is eligible for liquidation
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @return True if the position can be liquidated, false otherwise
+     */
+    function isLiquidatable(address user, uint256 positionId) external view returns (bool);
+
+    /**
+     * @notice Gets detailed information about an asset
+     * @param asset The address of the asset
+     * @return price The current USD price
+     * @return totalSupplied The total amount supplied as collateral
      * @return maxSupply The maximum supply threshold
-     * @return borrowRate The current borrow rate for the asset
-     * @return liquidationBonus The liquidation bonus for the asset
-     * @return tier The risk tier of the asset
-     * @dev Aggregates various asset metrics into a single call
+     * @return borrowRate The current borrow interest rate
+     * @return liquidationBonus The liquidation bonus percentage
+     * @return tier The collateral tier classification
      */
     function getAssetDetails(address asset)
         external
@@ -534,138 +794,232 @@ interface IPROTOCOL is IERC20 {
         );
 
     /**
-     * @notice Returns the raw price from an asset's oracle
+     * @notice Gets information about a user's LP token position
+     * @param user The address of the user
+     * @return lpTokenBalance The user's LP token balance
+     * @return usdcValue The USDC value of the LP tokens
+     * @return lastAccrualTime The timestamp of last interest accrual
+     * @return isRewardEligible Whether the user is eligible for rewards
+     * @return pendingRewards The pending reward amount
+     */
+    function getLPInfo(address user)
+        external
+        view
+        returns (
+            uint256 lpTokenBalance,
+            uint256 usdcValue,
+            uint256 lastAccrualTime,
+            bool isRewardEligible,
+            uint256 pendingRewards
+        );
+
+    /**
+     * @notice Calculates the health factor of a borrowing position
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @return The position's health factor (scaled by WAD)
+     * @dev Health factor > 1 means position is healthy, < 1 means liquidatable
+     */
+    function healthFactor(address user, uint256 positionId) external view returns (uint256);
+
+    /**
+     * @notice Gets all collateral assets in a position
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @return An array of asset addresses in the position
+     */
+    function getPositionCollateralAssets(address user, uint256 positionId) external view returns (address[] memory);
+
+    /**
+     * @notice Gets the current debt amount for a position
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @return The current debt amount including interest
+     */
+    function getPositionDebt(address user, uint256 positionId) external view returns (uint256);
+
+    /**
+     * @notice Calculates the current utilization rate of the protocol
+     * @return u The utilization rate (scaled by WAD)
+     * @dev Utilization = totalBorrow / totalSuppliedLiquidity
+     */
+    function getUtilization() external view returns (uint256 u);
+
+    /**
+     * @notice Gets the current supply interest rate
+     * @return The supply interest rate (scaled by RAY)
+     */
+    function getSupplyRate() external view returns (uint256);
+
+    /**
+     * @notice Gets the current borrow interest rate for a specific tier
+     * @param tier The collateral tier to query
+     * @return The borrow interest rate (scaled by RAY)
+     */
+    function getBorrowRate(CollateralTier tier) external view returns (uint256);
+
+    /**
+     * @notice Checks if a user is eligible for rewards
+     * @param user The address of the user
+     * @return True if user is eligible for rewards, false otherwise
+     */
+    function isRewardable(address user) external view returns (bool);
+
+    /**
+     * @notice Gets the liquidation fee percentage for a collateral tier
+     * @param tier The collateral tier to query
+     * @return The liquidation fee percentage (scaled by 1000)
+     */
+    function getTierLiquidationFee(CollateralTier tier) external view returns (uint256);
+
+    /**
+     * @notice Gets the price from a specific oracle
      * @param oracle The address of the price oracle
-     * @return The price from the oracle
-     * @dev Validates oracle data for freshness and volatility
+     * @return The price returned by the oracle
+     * @dev Validates the oracle data is fresh and within expected range
      */
     function getAssetPriceOracle(address oracle) external view returns (uint256);
 
     /**
-     * @notice Checks if a user is eligible for rewards
-     * @param user The address to check
-     * @return Whether the user is eligible for rewards
-     * @dev Based on time since last accrual and minimum supply
+     * @notice Determines the highest risk tier among collateral assets in a position
+     * @param user The address of the position owner
+     * @param positionId The ID of the position
+     * @return The highest risk CollateralTier in the position
      */
-    function isRewardable(address user) external view returns (bool);
-
-    // ------------ Protocol State Variables ------------
+    function getHighestTier(address user, uint256 positionId) external view returns (CollateralTier);
 
     /**
-     * @notice Total amount borrowed from the protocol
-     * @return Current total borrow amount in USDC
+     * @notice Gets all configured rates for each collateral tier
+     * @return borrowRates Array of borrow rates for each tier (scaled by RAY)
+     * @return liquidationBonuses Array of liquidation bonuses for each tier (scaled by 1000)
+     */
+    function getTierRates()
+        external
+        view
+        returns (uint256[4] memory borrowRates, uint256[4] memory liquidationBonuses);
+
+    /**
+     * @notice Gets all assets listed in the protocol
+     * @return An array of asset addresses
+     */
+    function getListedAssets() external view returns (address[] memory);
+
+    /**
+     * @notice Gets the current protocol version
+     * @return The protocol version number
+     */
+    function version() external view returns (uint8);
+
+    // State view functions
+    /**
+     * @notice Gets the total amount borrowed from the protocol
+     * @return The total borrowed amount
      */
     function totalBorrow() external view returns (uint256);
 
     /**
-     * @notice Total liquidity supplied to the protocol
-     * @return Current total supply in USDC
+     * @notice Gets the total liquidity supplied to the protocol
+     * @return The total supplied liquidity
      */
     function totalSuppliedLiquidity() external view returns (uint256);
 
     /**
-     * @notice Total interest paid by borrowers
-     * @return Accumulated borrower interest
+     * @notice Gets the total interest accrued by borrowers
+     * @return The total accrued borrower interest
      */
     function totalAccruedBorrowerInterest() external view returns (uint256);
 
     /**
-     * @notice Total interest earned by suppliers
-     * @return Accumulated supplier interest
+     * @notice Gets the total interest accrued by suppliers
+     * @return The total accrued supplier interest
      */
     function totalAccruedSupplierInterest() external view returns (uint256);
 
     /**
-     * @notice Total liquidity withdrawn from the protocol
-     * @return Cumulative withdrawn liquidity
+     * @notice Gets the total liquidity withdrawn from the protocol
+     * @return The total withdrawn liquidity
      */
     function withdrawnLiquidity() external view returns (uint256);
 
     /**
-     * @notice Target reward amount for eligible LPs
-     * @return Maximum reward amount per full period
+     * @notice Gets the target reward amount per distribution interval
+     * @return The target reward amount
      */
     function targetReward() external view returns (uint256);
 
     /**
-     * @notice Time interval for reward distribution
-     * @return Reward period in seconds
+     * @notice Gets the time interval between reward distributions
+     * @return The reward interval in seconds
      */
     function rewardInterval() external view returns (uint256);
 
     /**
-     * @notice Minimum supply to be eligible for rewards
-     * @return Minimum USDC equivalent required
+     * @notice Gets the minimum liquidity threshold required to be eligible for rewards
+     * @return The rewardable supply threshold
      */
     function rewardableSupply() external view returns (uint256);
 
     /**
-     * @notice Base interest rate for borrowing
-     * @return Base rate in parts per million
+     * @notice Gets the base interest rate charged on borrowing
+     * @return The base borrow rate (scaled by RAY)
      */
     function baseBorrowRate() external view returns (uint256);
 
     /**
-     * @notice Target profit margin for the protocol
-     * @return Profit target in parts per million
+     * @notice Gets the target profit rate for the protocol
+     * @return The base profit target (scaled by RAY)
      */
     function baseProfitTarget() external view returns (uint256);
 
     /**
-     * @notice Minimum governance tokens required for liquidation
-     * @return Minimum token requirement
+     * @notice Gets the minimum governance token threshold required to be a liquidator
+     * @return The liquidator threshold amount
      */
     function liquidatorThreshold() external view returns (uint256);
 
     /**
-     * @notice Current protocol version
-     * @return Protocol version number
-     */
-    function version() external view returns (uint8);
-
-    /**
-     * @notice Treasury address for protocol fees
-     * @return Treasury contract address
-     */
-    function treasury() external view returns (address);
-
-    /**
-     * @notice Fee charged for flash loans
-     * @return Fee in basis points
+     * @notice Gets the current fee charged for flash loans
+     * @return The flash loan fee (scaled by 1000)
      */
     function flashLoanFee() external view returns (uint256);
 
     /**
-     * @notice Total fees collected from flash loans
-     * @return Accumulated flash loan fees
+     * @notice Gets the total fees collected from flash loans
+     * @return The total flash loan fees collected
      */
     function totalFlashLoanFees() external view returns (uint256);
 
     /**
-     * @notice Base interest rate for a specific collateral tier
-     * @param tier The tier to query
-     * @return Base rate for the tier
+     * @notice Gets the address of the treasury contract
+     * @return The treasury contract address
+     */
+    function treasury() external view returns (address);
+
+    /**
+     * @notice Gets the total value locked for a specific asset
+     * @param asset The address of the asset
+     * @return The total value locked (TVL) amount
+     */
+    function assetTVL(address asset) external view returns (uint256);
+
+    /**
+     * @notice Gets the base borrow rate for a specific collateral tier
+     * @param tier The collateral tier to query
+     * @return The tier's base borrow rate (scaled by RAY)
      */
     function tierBaseBorrowRate(CollateralTier tier) external view returns (uint256);
 
     /**
-     * @notice Liquidation bonus for a specific collateral tier
-     * @param tier The tier to query
-     * @return Liquidation bonus percentage
+     * @notice Gets the liquidation bonus percentage for a specific collateral tier
+     * @param tier The collateral tier to query
+     * @return The tier's liquidation bonus (scaled by 1000)
      */
     function tierLiquidationBonus(CollateralTier tier) external view returns (uint256);
 
     /**
-     * @notice Total amount of an asset used as collateral
-     * @param asset The asset to query
-     * @return Total collateral amount
+     * @notice Gets the total amount of an asset supplied as collateral
+     * @param asset The address of the asset
+     * @return The total collateral amount
      */
     function totalCollateral(address asset) external view returns (uint256);
-
-    /**
-     * @notice Total value locked of an asset
-     * @param asset The asset to query
-     * @return TVL of the asset
-     */
-    function assetTVL(address asset) external view returns (uint256);
 }
