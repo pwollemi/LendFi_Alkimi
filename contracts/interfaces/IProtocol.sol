@@ -313,6 +313,12 @@ interface IPROTOCOL is IERC20 {
     error FeeTooHigh(uint256 requested, uint256 max);
 
     /**
+     * @notice Thrown when attempting to set a fee higher than allowed
+     * @param requested The requested fee
+     * @param min The minimum allowed fee
+     */
+    error FeeTooLow(uint256 requested, uint256 min);
+    /**
      * @notice Thrown when a user has insufficient token balance
      * @param token The address of the token
      * @param user The address of the user
@@ -480,6 +486,13 @@ interface IPROTOCOL is IERC20 {
      * @param positionId The ID of the inactive position
      */
     error InactivePosition(address user, uint256 positionId);
+
+    // /**
+    //  * @notice Throwns if slippage requirements aren't met
+    //  * @param amount Amount of LP tokens exchanged, 18 decimals
+    //  * @param minAmountOut Min Value received in exchange, 6 decimals
+    //  */
+    // error SlippageExceeded(uint256 amount, uint256 minAmountOut);
 
     // Core functions
 

@@ -413,7 +413,12 @@ contract Lendefi is
      * @custom:events Emits UpdateFlashLoanFee event with new fee value
      */
     function updateFlashLoanFee(uint256 newFee) external onlyRole(MANAGER_ROLE) {
-        // Replace require with if-revert
+        // Add minimum fee check
+        if (newFee < 5) {
+            revert FeeTooLow(newFee, 5); // Minimum 5 basis points (0.05%)
+        }
+
+        // Existing maximum check
         if (newFee > 100) {
             revert FeeTooHigh(newFee, 100);
         }
