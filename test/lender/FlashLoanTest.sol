@@ -11,7 +11,9 @@ import {SafeERC20 as TH} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC
 
 contract FlashLoanTest is BasicDeploy {
     // Events to verify
-    event FlashLoan(address indexed initiator, address indexed receiver, address token, uint256 amount, uint256 fee);
+    event FlashLoan(
+        address indexed initiator, address indexed receiver, address indexed token, uint256 amount, uint256 fee
+    );
     event UpdateFlashLoanFee(uint256 newFee);
 
     MockFlashLoanReceiver internal flashLoanReceiver;
@@ -115,7 +117,7 @@ contract FlashLoanTest is BasicDeploy {
         // Expect revert with FlashLoanFundsNotReturned error
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.FlashLoanFundsNotReturned.selector, requiredBalance, expectedBalanceAfterLoan
+                IPROTOCOL.FlashLoanFundsNotReturned.selector, requiredBalance, expectedBalanceAfterLoan
             )
         );
 
@@ -129,7 +131,7 @@ contract FlashLoanTest is BasicDeploy {
         address mockToken = address(100);
 
         // Expect revert with OnlyUsdcSupported error
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.OnlyUsdcSupported.selector, mockToken));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.OnlyUsdcSupported.selector, mockToken));
 
         // Attempt flash loan with non-USDC token
         LendefiInstance.flashLoan(address(flashLoanReceiver), mockToken, 100e6, "");
@@ -142,7 +144,7 @@ contract FlashLoanTest is BasicDeploy {
         vm.startPrank(address(timelockInstance));
 
         // Expect revert with FeeTooHigh error
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.FeeTooHigh.selector, newFee, 100));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.FeeTooHigh.selector, newFee, 100));
 
         // Attempt to update fee beyond max
         LendefiInstance.updateFlashLoanFee(newFee);
@@ -157,7 +159,10 @@ contract FlashLoanTest is BasicDeploy {
         // Expect revert with InsufficientFlashLoanLiquidity error
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.InsufficientFlashLoanLiquidity.selector, address(usdcInstance), flashLoanAmount, totalLiquidity
+                IPROTOCOL.InsufficientFlashLoanLiquidity.selector,
+                address(usdcInstance),
+                flashLoanAmount,
+                totalLiquidity
             )
         );
 
@@ -173,7 +178,7 @@ contract FlashLoanTest is BasicDeploy {
         flashLoanReceiver.setShouldFail(true);
 
         // Expect revert with FlashLoanFailed error
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.FlashLoanFailed.selector));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.FlashLoanFailed.selector));
 
         // Attempt flash loan
         LendefiInstance.flashLoan(address(flashLoanReceiver), address(usdcInstance), flashLoanAmount, "");
