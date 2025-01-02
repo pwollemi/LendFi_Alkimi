@@ -214,9 +214,9 @@ contract BorrowTest is BasicDeploy {
         assertEq(positionDebt, borrowAmount, "Position debt should be updated");
 
         // Verify the position is still in isolation mode
-        // IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        address[] memory positionAssets = LendefiInstance.getPositionCollateralAssets(bob, positionId);
         assertTrue(position.isIsolated, "Position should remain isolated");
-        assertEq(position.isolatedAsset, address(rwaToken), "Isolated asset should be unchanged");
+        assertEq(positionAssets[0], address(rwaToken), "Isolated asset should be unchanged");
     }
 
     // Test 3: Borrow fails with invalid position ID
@@ -225,7 +225,7 @@ contract BorrowTest is BasicDeploy {
         uint256 borrowAmount = 10_000e6;
 
         vm.startPrank(bob);
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, bob, invalidPositionId));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, bob, invalidPositionId));
         LendefiInstance.borrow(invalidPositionId, borrowAmount);
         vm.stopPrank();
     }
@@ -265,7 +265,7 @@ contract BorrowTest is BasicDeploy {
         uint256 excessiveAmount = creditLimit + 1e6; // Exceed by 1 USDC
 
         // Attempt to borrow more than credit limit
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.ExceedsCreditLimit.selector, excessiveAmount, creditLimit));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.ExceedsCreditLimit.selector, excessiveAmount, creditLimit));
         LendefiInstance.borrow(positionId, excessiveAmount);
         vm.stopPrank();
     }
@@ -315,7 +315,7 @@ contract BorrowTest is BasicDeploy {
         uint256 borrowAmount = 2000e6;
 
         vm.expectRevert(
-            abi.encodeWithSelector(Lendefi.InsufficientLiquidity.selector, borrowAmount, remainingLiquidity)
+            abi.encodeWithSelector(IPROTOCOL.InsufficientLiquidity.selector, borrowAmount, remainingLiquidity)
         );
         LendefiInstance.borrow(positionId, borrowAmount);
         vm.stopPrank();
@@ -338,7 +338,7 @@ contract BorrowTest is BasicDeploy {
         // Try to borrow slightly more than the isolation debt cap
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.IsolationDebtCapExceeded.selector, address(rwaToken), isolationDebtCap + 1, isolationDebtCap
+                IPROTOCOL.IsolationDebtCapExceeded.selector, address(rwaToken), isolationDebtCap + 1, isolationDebtCap
             )
         );
         LendefiInstance.borrow(positionId, isolationDebtCap + 1);
@@ -364,7 +364,7 @@ contract BorrowTest is BasicDeploy {
 
         // Try to borrow without collateral
         vm.expectRevert(
-            abi.encodeWithSelector(Lendefi.NoIsolatedCollateral.selector, bob, positionId, address(rwaToken))
+            abi.encodeWithSelector(IPROTOCOL.NoIsolatedCollateral.selector, bob, positionId, address(rwaToken))
         );
         LendefiInstance.borrow(positionId, 1000e6);
         vm.stopPrank();
@@ -410,7 +410,7 @@ contract BorrowTest is BasicDeploy {
         // Try to borrow once more (should fail)
         uint256 currentDebt = LendefiInstance.getPositionDebt(bob, positionId);
         vm.expectRevert(
-            abi.encodeWithSelector(Lendefi.ExceedsCreditLimit.selector, currentDebt + borrowPerTx, creditLimit)
+            abi.encodeWithSelector(IPROTOCOL.ExceedsCreditLimit.selector, currentDebt + borrowPerTx, creditLimit)
         );
         LendefiInstance.borrow(positionId, borrowPerTx);
 
