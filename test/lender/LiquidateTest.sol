@@ -282,7 +282,7 @@ contract LiquidateTest is BasicDeploy {
         // Attempt liquidation without enough governance tokens
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.InsufficientGovTokens.selector, charlie, LendefiInstance.liquidatorThreshold(), 0
+                IPROTOCOL.InsufficientGovTokens.selector, charlie, LendefiInstance.liquidatorThreshold(), 0
             )
         );
         LendefiInstance.liquidate(bob, positionId);
@@ -309,7 +309,7 @@ contract LiquidateTest is BasicDeploy {
         vm.startPrank(charlie);
 
         // Attempt to liquidate a healthy position
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.NotLiquidatable.selector, bob, positionId));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.NotLiquidatable.selector, bob, positionId));
         LendefiInstance.liquidate(bob, positionId);
         vm.stopPrank();
     }
@@ -325,7 +325,7 @@ contract LiquidateTest is BasicDeploy {
         vm.startPrank(charlie);
 
         // Attempt to liquidate nonexistent position
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, bob, 0));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, bob, 0));
         LendefiInstance.liquidate(bob, 0);
         vm.stopPrank();
     }
@@ -472,7 +472,11 @@ contract LiquidateTest is BasicDeploy {
         );
 
         // Verify position assets array cleared
-        assertEq(LendefiInstance.getPositionAssets(user, positionId).length, 0, "Position assets array should be empty");
+        assertEq(
+            LendefiInstance.getPositionCollateralAssets(user, positionId).length,
+            0,
+            "Position assets array should be empty"
+        );
     }
 
     // Fuzz test for liquidating positions with different debt amounts
@@ -523,7 +527,7 @@ contract LiquidateTest is BasicDeploy {
             assertEq(charlieWethBalance, collateralAmount, "Liquidator should receive all collateral");
         } else {
             // Attempt liquidation of non-liquidatable position should revert
-            vm.expectRevert(abi.encodeWithSelector(Lendefi.NotLiquidatable.selector, bob, positionId));
+            vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.NotLiquidatable.selector, bob, positionId));
             LendefiInstance.liquidate(bob, positionId);
         }
         vm.stopPrank();
