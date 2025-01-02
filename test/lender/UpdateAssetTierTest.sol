@@ -9,7 +9,8 @@ import {MockPriceOracle} from "../../contracts/mock/MockPriceOracle.sol";
 
 contract UpdateAssetTierTest is BasicDeploy {
     // Events
-    event AssetTierUpdated(address indexed asset, IPROTOCOL.CollateralTier tier);
+
+    event AssetTierUpdated(address indexed asset, IPROTOCOL.CollateralTier indexed newTier);
 
     MockPriceOracle internal wethOracle;
     MockPriceOracle internal usdcOracle;
@@ -107,7 +108,7 @@ contract UpdateAssetTierTest is BasicDeploy {
         address unlisted = address(0x123); // Random unlisted address
 
         vm.startPrank(address(timelockInstance));
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.AssetNotListed.selector, unlisted));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.AssetNotListed.selector, unlisted));
         LendefiInstance.updateAssetTier(unlisted, IPROTOCOL.CollateralTier.ISOLATED);
         vm.stopPrank();
     }
@@ -139,14 +140,6 @@ contract UpdateAssetTierTest is BasicDeploy {
         vm.stopPrank();
     }
 
-    function test_UpdateAssetTier_EventEmission() public {
-        vm.expectEmit(true, false, false, true);
-        emit AssetTierUpdated(address(wethInstance), IPROTOCOL.CollateralTier.ISOLATED);
-
-        vm.prank(address(timelockInstance));
-        LendefiInstance.updateAssetTier(address(wethInstance), IPROTOCOL.CollateralTier.ISOLATED);
-    }
-
     function test_UpdateAssetTier_MultipleAssets() public {
         vm.startPrank(address(timelockInstance));
 
@@ -167,6 +160,15 @@ contract UpdateAssetTierTest is BasicDeploy {
         vm.stopPrank();
     }
 
+    function test_UpdateAssetTier_EventEmission() public {
+        // The second parameter is also indexed in the actual contract
+        vm.expectEmit(true, true, false, false);
+        emit AssetTierUpdated(address(wethInstance), IPROTOCOL.CollateralTier.ISOLATED);
+
+        vm.prank(address(timelockInstance));
+        LendefiInstance.updateAssetTier(address(wethInstance), IPROTOCOL.CollateralTier.ISOLATED);
+    }
+
     function test_UpdateAssetTier_NoChangeWhenSameTier() public {
         vm.startPrank(address(timelockInstance));
 
@@ -174,9 +176,11 @@ contract UpdateAssetTierTest is BasicDeploy {
         IPROTOCOL.Asset memory initialAsset = LendefiInstance.getAssetInfo(address(wethInstance));
         IPROTOCOL.CollateralTier initialTier = initialAsset.tier;
 
-        // Update to same tier
-        vm.expectEmit(true, false, false, true);
+        // The second parameter is also indexed in the actual contract
+        vm.expectEmit(true, true, false, false);
         emit AssetTierUpdated(address(wethInstance), initialTier);
+
+        // Update to same tier
         LendefiInstance.updateAssetTier(address(wethInstance), initialTier);
 
         // Verify tier is unchanged
