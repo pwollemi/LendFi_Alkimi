@@ -170,7 +170,7 @@ contract ExchangeTest is BasicDeploy {
         // Attempt to exchange more than balance
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.InsufficientTokenBalance.selector, address(LendefiInstance), alice, supplyAmount
+                IPROTOCOL.InsufficientTokenBalance.selector, address(LendefiInstance), alice, supplyAmount
             )
         );
         LendefiInstance.exchange(exchangeAmount);
