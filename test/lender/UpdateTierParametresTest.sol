@@ -135,7 +135,7 @@ contract UpdateTierParametersTest is BasicDeploy {
         vm.prank(address(timelockInstance));
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.RateTooHigh.selector,
+                IPROTOCOL.RateTooHigh.selector,
                 250001, // requested (just above limit)
                 250000 // maximum (0.25e6 = 25%)
             )
@@ -161,7 +161,7 @@ contract UpdateTierParametersTest is BasicDeploy {
         vm.prank(address(timelockInstance));
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.BonusTooHigh.selector,
+                IPROTOCOL.BonusTooHigh.selector,
                 200001, // requested (just above limit)
                 200000 // maximum (0.2e6 = 20%)
             )
