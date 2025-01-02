@@ -290,7 +290,7 @@ contract RepayTest is BasicDeploy {
         uint256 invalidPositionId = 999;
 
         vm.startPrank(bob);
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, bob, invalidPositionId));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, bob, invalidPositionId));
         LendefiInstance.repay(invalidPositionId, 1000e6);
         vm.stopPrank();
     }
@@ -307,7 +307,7 @@ contract RepayTest is BasicDeploy {
         LendefiInstance.supplyCollateral(address(wethInstance), 10 ether, positionId);
 
         // Try to repay when there's no debt
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.NoDebtToRepay.selector, bob, positionId));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.NoDebtToRepay.selector, bob, positionId));
         LendefiInstance.repay(positionId, 1000e6);
         vm.stopPrank();
     }
