@@ -143,7 +143,7 @@ contract CalculateCreditLimitTest is BasicDeploy {
     function test_InvalidPositionIdReverts() public {
         uint256 invalidPositionId = 999;
 
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, alice, invalidPositionId));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, alice, invalidPositionId));
 
         LendefiInstance.calculateCreditLimit(alice, invalidPositionId);
     }
@@ -266,7 +266,7 @@ contract CalculateCreditLimitTest is BasicDeploy {
         rwaOracleInstance.setPrice(0);
 
         // Should revert with "Invalid price" when trying to get credit limit
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.OracleInvalidPrice.selector, address(rwaOracleInstance), 0));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.OracleInvalidPrice.selector, address(rwaOracleInstance), 0));
         LendefiInstance.calculateCreditLimit(alice, positionId);
     }
 
