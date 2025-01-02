@@ -112,7 +112,7 @@ contract FlashLoanRecipient is IFlashLoanRecipient, Ownable {
     ) external override onlyVault {
         address target = address(uint160(bytes20(userData)));
         uint256 positionId = PROTOCOL_INSTANCE.getUserPositionsCount(target) - 1;
-        address[] memory assets = PROTOCOL_INSTANCE.getPositionAssets(target, positionId);
+        address[] memory assets = PROTOCOL_INSTANCE.getPositionCollateralAssets(target, positionId);
         uint256 len = assets.length;
 
         uint256[] memory tokenAmounts = new uint256[](len);
