@@ -156,7 +156,7 @@ contract SupplyLiquidityTest is BasicDeploy {
 
         // Attempt to supply more than balance
         vm.expectRevert(
-            abi.encodeWithSelector(Lendefi.InsufficientTokenBalance.selector, address(usdcInstance), bob, userBalance)
+            abi.encodeWithSelector(IPROTOCOL.InsufficientTokenBalance.selector, address(usdcInstance), bob, userBalance)
         );
         LendefiInstance.supplyLiquidity(supplyAmount);
         vm.stopPrank();
