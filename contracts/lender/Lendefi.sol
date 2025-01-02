@@ -175,10 +175,11 @@ contract Lendefi is
     /// @notice Collateral amounts by position and asset
     /// @dev Maps user address, position ID, and asset address to collateral amount
     mapping(address => mapping(uint256 => mapping(address => uint256))) internal positionCollateralAmounts;
-
     /// @notice List of assets used as collateral in each position
     /// @dev Maps user address and position ID to array of collateral asset addresses
-    mapping(address => mapping(uint256 => address[])) internal positionAssets;
+    mapping(address => mapping(uint256 => address[])) internal positionCollateralAssets;
+    /// @dev borrower address position mapping used to remove positonCollateralAssets when needed
+    mapping(address src => mapping(uint256 => mapping(address => uint256 pos))) internal pcaPos;
 
     /// @notice Total value locked of each supported asset
     /// @dev Tracks how much of each asset is held by the protocol
@@ -202,239 +203,6 @@ contract Lendefi is
     uint256[50] private __gap;
 
     /**
-     * @notice Thrown when a position ID is invalid for a user
-     * @param user The address of the position owner
-     * @param positionId The invalid position ID
-     */
-    error InvalidPosition(address user, uint256 positionId);
-
-    /**
-     * @notice Thrown when a liquidator has insufficient governance tokens
-     * @param liquidator The address attempting to liquidate
-     * @param required The required amount of governance tokens
-     * @param balance The liquidator's actual balance
-     */
-    error InsufficientGovTokens(address liquidator, uint256 required, uint256 balance);
-
-    /**
-     * @notice Thrown when attempting to liquidate a healthy position
-     * @param user The address of the position owner
-     * @param positionId The ID of the position that can't be liquidated
-     */
-    error NotLiquidatable(address user, uint256 positionId);
-
-    /**
-     * @notice Thrown when a token transfer fails
-     * @param token The address of the token that failed to transfer
-     * @param from The sender address
-     * @param to The recipient address
-     * @param amount The amount that failed to transfer
-     */
-    error TransferFailed(address token, address from, address to, uint256 amount);
-
-    /**
-     * @notice Thrown when there's insufficient liquidity for a flash loan
-     * @param token The address of the requested token
-     * @param requested The amount requested
-     * @param available The actual available liquidity
-     */
-    error InsufficientFlashLoanLiquidity(address token, uint256 requested, uint256 available);
-
-    /**
-     * @notice Thrown when a flash loan execution fails
-     */
-    error FlashLoanFailed();
-
-    /**
-     * @notice Thrown when flash loan funds aren't fully returned with fees
-     * @param expected The expected amount to be returned
-     * @param actual The actual amount returned
-     */
-    error FlashLoanFundsNotReturned(uint256 expected, uint256 actual);
-
-    /**
-     * @notice Thrown when attempting flash loan with unsupported token
-     * @param token The address of the unsupported token
-     */
-    error OnlyUsdcSupported(address token);
-
-    /**
-     * @notice Thrown when attempting to set a fee higher than allowed
-     * @param requested The requested fee
-     * @param max The maximum allowed fee
-     */
-    error FeeTooHigh(uint256 requested, uint256 max);
-
-    /**
-     * @notice Thrown when a user has insufficient token balance
-     * @param token The address of the token
-     * @param user The address of the user
-     * @param available The user's actual balance
-     */
-    error InsufficientTokenBalance(address token, address user, uint256 available);
-
-    /**
-     * @notice Thrown when attempting to use an asset not listed in the protocol
-     * @param asset The address of the unlisted asset
-     */
-    error AssetNotListed(address asset);
-
-    /**
-     * @notice Thrown when attempting to use ineligible asset in isolation mode
-     * @param asset The address of the asset not eligible for isolation
-     */
-    error NotIsolationEligible(address asset);
-
-    /**
-     * @notice Thrown when protocol has insufficient liquidity for borrowing
-     * @param requested The requested amount
-     * @param available The actual available liquidity
-     */
-    error InsufficientLiquidity(uint256 requested, uint256 available);
-
-    /**
-     * @notice Thrown when attempting to exceed isolation debt cap
-     * @param asset The isolated asset address
-     * @param requested The requested debt amount
-     * @param cap The maximum allowed debt in isolation mode
-     */
-    error IsolationDebtCapExceeded(address asset, uint256 requested, uint256 cap);
-
-    /**
-     * @notice Thrown when no collateral is provided for isolated asset
-     * @param user The address of the position owner
-     * @param positionId The ID of the position
-     * @param isolatedAsset The address of the isolated asset
-     */
-    error NoIsolatedCollateral(address user, uint256 positionId, address isolatedAsset);
-
-    /**
-     * @notice Thrown when attempting to borrow beyond credit limit
-     * @param requested The requested borrow amount
-     * @param creditLimit The maximum allowed borrow amount
-     */
-    error ExceedsCreditLimit(uint256 requested, uint256 creditLimit);
-
-    /**
-     * @notice Thrown when attempting to repay a position with no debt
-     * @param user The address of the position owner
-     * @param positionId The ID of the position with no debt
-     */
-    error NoDebtToRepay(address user, uint256 positionId);
-
-    /**
-     * @notice Thrown when asset doesn't match isolation mode settings
-     * @param user The address of the position owner
-     * @param positionId The ID of the position
-     * @param requestedAsset The asset being added/withdrawn
-     * @param isolatedAsset The current isolated asset
-     */
-    error InvalidAssetForIsolation(address user, uint256 positionId, address requestedAsset, address isolatedAsset);
-
-    /**
-     * @notice Thrown when user has insufficient collateral in position
-     * @param user The address of the position owner
-     * @param positionId The ID of the position
-     * @param asset The address of the collateral asset
-     * @param requested The requested withdrawal amount
-     * @param available The actual available collateral
-     */
-    error InsufficientCollateralBalance(
-        address user, uint256 positionId, address asset, uint256 requested, uint256 available
-    );
-
-    /**
-     * @notice Thrown when withdrawal would make position undercollateralized
-     * @param user The address of the position owner
-     * @param positionId The ID of the position
-     * @param debtAmount The position's current debt
-     * @param creditLimit The position's new credit limit after withdrawal
-     */
-    error WithdrawalExceedsCreditLimit(address user, uint256 positionId, uint256 debtAmount, uint256 creditLimit);
-
-    /**
-     * @notice Thrown when attempting to use a disabled asset
-     * @param asset The address of the disabled asset
-     */
-    error AssetDisabled(address asset);
-
-    /**
-     * @notice Thrown when attempting to use asset that requires isolation mode
-     * @param asset The address of the asset that requires isolation
-     */
-    error IsolationModeRequired(address asset);
-
-    /**
-     * @notice Thrown when attempting to exceed asset supply cap
-     * @param asset The address of the asset
-     * @param requested The requested supply amount
-     * @param cap The maximum allowed supply
-     */
-    error SupplyCapExceeded(address asset, uint256 requested, uint256 cap);
-
-    /**
-     * @notice Thrown when oracle returns invalid price data
-     * @param oracle The address of the price oracle
-     * @param price The invalid price value
-     */
-    error OracleInvalidPrice(address oracle, int256 price);
-
-    /**
-     * @notice Thrown when oracle round is incomplete
-     * @param oracle The address of the price oracle
-     * @param roundId The current round ID
-     * @param answeredInRound The round when answer was computed
-     */
-    error OracleStalePrice(address oracle, uint80 roundId, uint80 answeredInRound);
-
-    /**
-     * @notice Thrown when oracle data is too old
-     * @param oracle The address of the price oracle
-     * @param timestamp The timestamp of the oracle data
-     * @param currentTimestamp The current block timestamp
-     * @param maxAge The maximum allowed age for oracle data
-     */
-    error OracleTimeout(address oracle, uint256 timestamp, uint256 currentTimestamp, uint256 maxAge);
-
-    /**
-     * @notice Thrown when price has excessive volatility with stale data
-     * @param oracle The address of the price oracle
-     * @param price The current price
-     * @param volatility The calculated price change percentage
-     */
-    error OracleInvalidPriceVolatility(address oracle, int256 price, uint256 volatility);
-    /// @notice Thrown when trying to add more than 20 different assets to a position
-    /// @param user The position owner
-    /// @param positionId The position ID
-    error TooManyAssets(address user, uint256 positionId);
-    /// @notice Thrown when trying to set a rate below minimum allowed
-    /// @param requested The requested rate
-    /// @param minimum The minimum allowed rate
-    error RateTooLow(uint256 requested, uint256 minimum);
-    error RewardTooHigh(uint256 requested, uint256 max);
-    /// @notice Thrown when trying to set a reward interval below minimum allowed
-    /// @param requested The requested interval in seconds
-    /// @param minimum The minimum allowed interval in seconds
-    error RewardIntervalTooShort(uint256 requested, uint256 minimum);
-    /// @notice Thrown when trying to set rewardable supply below minimum allowed
-    /// @param requested The requested supply amount
-    /// @param minimum The minimum allowed supply amount
-    error RewardableSupplyTooLow(uint256 requested, uint256 minimum);
-    /// @notice Thrown when trying to set liquidator threshold below minimum allowed
-    /// @param requested The requested threshold amount
-    /// @param minimum The minimum allowed threshold amount
-    error LiquidatorThresholdTooLow(uint256 requested, uint256 minimum);
-    /// @notice Thrown when trying to set a rate above maximum allowed
-    /// @param requested The requested rate
-    /// @param maximum The maximum allowed rate
-    error RateTooHigh(uint256 requested, uint256 maximum);
-
-    /// @notice Thrown when trying to set a bonus above maximum allowed
-    /// @param requested The requested bonus
-    /// @param maximum The maximum allowed bonus
-    error BonusTooHigh(uint256 requested, uint256 maximum);
-
-    /**
      * @notice Validates that the provided position ID exists for the specified user
      * @param user The address of the user who owns the position
      * @param positionId The ID of the position to validate
@@ -448,7 +216,40 @@ contract Lendefi is
         _;
     }
 
+    /**
+     * @notice Validates that the given position is in ACTIVE status
+     * @param user The address of the position owner
+     * @param positionId The ID of the position to validate
+     * @dev Reverts with InactivePosition error if the position status is not ACTIVE
+     * @custom:security This ensures operations are only performed on active positions
+     * @custom:error InactivePosition if position has been CLOSED or LIQUIDATED
+     */
+    modifier activePosition(address user, uint256 positionId) {
+        // First ensure the position exists
+        if (positionId >= positions[user].length) {
+            revert InvalidPosition(user, positionId);
+        }
+
+        // Then check if it's active
+        if (positions[user][positionId].status != PositionStatus.ACTIVE) {
+            revert InactivePosition(user, positionId);
+        }
+        _;
+    }
+    /**
+     * @notice Validates that the asset is listed in the protocol
+     * @param asset The address of the asset to validate
+     * @dev Reverts with AssetNotListed error if the asset is not in the listedAsset set
+     */
+
+    modifier validAsset(address asset) {
+        if (!listedAsset.contains(asset)) {
+            revert AssetNotListed(asset);
+        }
+        _;
+    }
     /// @custom:oz-upgrades-unsafe-allow constructor
+
     constructor() {
         _disableInitializers();
     }
@@ -733,43 +534,56 @@ contract Lendefi is
      */
     function supplyCollateral(address asset, uint256 amount, uint256 positionId)
         external
-        validPosition(msg.sender, positionId)
+        activePosition(msg.sender, positionId)
+        validAsset(asset)
         nonReentrant
         whenNotPaused
     {
-        if (!listedAsset.contains(asset)) {
-            revert AssetNotListed(asset);
-        }
-
         Asset storage assetConfig = assetInfo[asset];
         if (assetConfig.active != 1) {
             revert AssetDisabled(asset);
-        }
-
-        UserPosition storage position = positions[msg.sender][positionId];
-        address[] storage posAssets = positionAssets[msg.sender][positionId];
-        // Add check for maximum assets per position
-        if (positionCollateralAmounts[msg.sender][positionId][asset] == 0 && posAssets.length >= 20) {
-            revert TooManyAssets(msg.sender, positionId);
-        }
-
-        // Isolation mode checks
-        if (assetConfig.tier == CollateralTier.ISOLATED) {
-            if (!(position.isIsolated && position.isolatedAsset == asset)) {
-                revert IsolationModeRequired(asset);
-            }
-        } else if (position.isIsolated) {
-            if (asset != position.isolatedAsset) {
-                revert InvalidAssetForIsolation(msg.sender, positionId, asset, position.isolatedAsset);
-            }
         }
 
         if (totalCollateral[asset] + amount > assetConfig.maxSupplyThreshold) {
             revert SupplyCapExceeded(asset, totalCollateral[asset] + amount, assetConfig.maxSupplyThreshold);
         }
 
-        // Add asset to positionAssets array if not already present
-        if (positionCollateralAmounts[msg.sender][positionId][asset] == 0) {
+        UserPosition storage position = positions[msg.sender][positionId];
+        address[] storage posAssets = positionCollateralAssets[msg.sender][positionId];
+
+        // Verify position is active
+        if (position.status != PositionStatus.ACTIVE) {
+            revert InactivePosition(msg.sender, positionId);
+        }
+
+        // Check if this is an ISOLATED tier asset being added to a cross-collateral position
+        if (assetConfig.tier == CollateralTier.ISOLATED && !position.isIsolated) {
+            revert IsolationModeRequired(asset);
+        }
+
+        // Isolation mode checks
+        if (position.isIsolated && posAssets.length > 0 && asset != posAssets[0]) {
+            revert InvalidPositionAsset(msg.sender, positionId, asset, posAssets[0]);
+        }
+
+        // Check if asset needs to be added to the position's assets array
+        bool assetAlreadyAdded = false;
+
+        // For isolated positions created with this asset, it should already be in the array
+        if (posAssets.length > 0) {
+            // Check if the position of this asset in the array is valid
+            uint256 assetPos = pcaPos[msg.sender][positionId][asset];
+            if (assetPos < posAssets.length && posAssets[assetPos] == asset) {
+                assetAlreadyAdded = true;
+            }
+        }
+
+        // Add asset to positionCollateralAssets array if not already present
+        if (!assetAlreadyAdded) {
+            if (posAssets.length >= 20) {
+                revert TooManyAssets(msg.sender, positionId);
+            }
+            pcaPos[msg.sender][positionId][asset] = posAssets.length;
             posAssets.push(asset);
         }
 
@@ -788,33 +602,32 @@ contract Lendefi is
      * @param amount The amount of the asset to withdraw
      * @param positionId The ID of the position to withdraw from
      * @dev Process:
-     *      1. Validates isolation mode constraints
-     *      2. Checks sufficient collateral balance
-     *      3. Updates collateral state
-     *      4. Verifies remaining collateral supports existing debt
-     *      5. Removes asset from position if fully withdrawn
+     *      1. Validates position is active
+     *      2. Validates isolation mode constraints
+     *      3. Checks sufficient collateral balance
+     *      4. Updates collateral state
+     *      5. Verifies remaining collateral supports existing debt
+     *      6. Removes asset from position if fully withdrawn
      * @custom:security Non-reentrant and pausable to prevent attack vectors
-     * @custom:validation Checks:
-     *      - Position exists (via validPosition modifier)
-     *      - Isolation mode constraints
-     *      - Sufficient collateral balance
-     *      - Withdrawal doesn't exceed credit limit
-     * @custom:events Emits:
-     *      - TVLUpdated with new total value locked
-     *      - WithdrawCollateral with withdrawal details
-     * @custom:access Public function, but requires valid position ownership
      */
     function withdrawCollateral(address asset, uint256 amount, uint256 positionId)
         external
-        validPosition(msg.sender, positionId)
+        activePosition(msg.sender, positionId)
         nonReentrant
         whenNotPaused
     {
         UserPosition storage position = positions[msg.sender][positionId];
 
+        // Verify position is active
+        if (position.status != PositionStatus.ACTIVE) {
+            revert InactivePosition(msg.sender, positionId);
+        }
+
+        address[] storage posAssets = positionCollateralAssets[msg.sender][positionId];
+
         // Check isolation mode constraints
-        if (position.isIsolated && asset != position.isolatedAsset) {
-            revert InvalidAssetForIsolation(msg.sender, positionId, asset, position.isolatedAsset);
+        if (position.isIsolated && asset != posAssets[0]) {
+            revert InvalidPositionAsset(msg.sender, positionId, asset, posAssets[0]);
         }
 
         uint256 currentBalance = positionCollateralAmounts[msg.sender][positionId][asset];
@@ -835,14 +648,14 @@ contract Lendefi is
 
         // Remove asset from position assets array if balance becomes 0
         if (positionCollateralAmounts[msg.sender][positionId][asset] == 0) {
-            address[] storage posAssets = positionAssets[msg.sender][positionId];
-            for (uint256 i = 0; i < posAssets.length; i++) {
-                if (posAssets[i] == asset) {
-                    // Swap with last element and pop
-                    posAssets[i] = posAssets[posAssets.length - 1];
-                    posAssets.pop();
-                    break;
-                }
+            uint256 ipos = pcaPos[msg.sender][positionId][asset];
+            uint256 len = posAssets.length;
+            posAssets[ipos] = posAssets[len - 1];
+            posAssets.pop();
+
+            // Update the pcaPos mapping for the swapped asset
+            if (ipos < len - 1) {
+                pcaPos[msg.sender][positionId][posAssets[ipos]] = ipos;
             }
         }
 
@@ -864,15 +677,13 @@ contract Lendefi is
      *  - PositionCreated with user address, position ID, and isolation mode status
      * @custom:access Public function, any user can create positions
      */
-    function createPosition(address asset, bool isIsolated) external nonReentrant whenNotPaused {
-        if (!listedAsset.contains(asset)) {
-            revert AssetNotListed(asset);
-        }
-
+    function createPosition(address asset, bool isIsolated) external validAsset(asset) nonReentrant whenNotPaused {
         UserPosition storage newPosition = positions[msg.sender].push();
         newPosition.isIsolated = isIsolated;
+        newPosition.status = PositionStatus.ACTIVE;
         if (isIsolated) {
-            newPosition.isolatedAsset = asset;
+            address[] storage assets = positionCollateralAssets[msg.sender][positions[msg.sender].length - 1];
+            assets.push(asset);
         }
 
         emit PositionCreated(msg.sender, positions[msg.sender].length - 1, isIsolated);
@@ -903,7 +714,7 @@ contract Lendefi is
      */
     function borrow(uint256 positionId, uint256 amount)
         external
-        validPosition(msg.sender, positionId)
+        activePosition(msg.sender, positionId)
         nonReentrant
         whenNotPaused
     {
@@ -915,18 +726,17 @@ contract Lendefi is
 
         // Check isolation mode constraints if applicable
         if (position.isIsolated) {
-            Asset memory asset = assetInfo[position.isolatedAsset];
+            address posAsset = positionCollateralAssets[msg.sender][positionId][0];
+            Asset memory asset = assetInfo[posAsset];
 
             // Check isolation debt cap
             if (position.debtAmount + amount > asset.isolationDebtCap) {
-                revert IsolationDebtCapExceeded(
-                    position.isolatedAsset, position.debtAmount + amount, asset.isolationDebtCap
-                );
+                revert IsolationDebtCapExceeded(posAsset, position.debtAmount + amount, asset.isolationDebtCap);
             }
 
             // Check that collateral exists for isolated asset
-            if (positionCollateralAmounts[msg.sender][positionId][position.isolatedAsset] == 0) {
-                revert NoIsolatedCollateral(msg.sender, positionId, position.isolatedAsset);
+            if (positionCollateralAmounts[msg.sender][positionId][posAsset] == 0) {
+                revert NoIsolatedCollateral(msg.sender, positionId, posAsset);
             }
         }
 
@@ -969,7 +779,7 @@ contract Lendefi is
      */
     function repay(uint256 positionId, uint256 amount)
         external
-        validPosition(msg.sender, positionId)
+        activePosition(msg.sender, positionId)
         nonReentrant
         whenNotPaused
     {
@@ -1026,12 +836,12 @@ contract Lendefi is
      */
     function exitPosition(uint256 positionId)
         external
-        validPosition(msg.sender, positionId)
+        activePosition(msg.sender, positionId)
         nonReentrant
         whenNotPaused
     {
         UserPosition storage position = positions[msg.sender][positionId];
-        address[] storage posAssets = positionAssets[msg.sender][positionId];
+        address[] storage posAssets = positionCollateralAssets[msg.sender][positionId];
 
         // If there's debt, repay it first
         if (position.debtAmount > 0) {
@@ -1061,35 +871,11 @@ contract Lendefi is
                 emit WithdrawCollateral(msg.sender, positionId, asset, amount);
             }
         }
-        delete positionAssets[msg.sender][positionId];
 
-        // Reset isolation mode if active
-        if (position.isIsolated) {
-            delete position.isIsolated;
-            delete position.isolatedAsset;
-            emit ExitedIsolationMode(msg.sender, positionId);
-        }
+        delete positions[msg.sender][positionId].debtAmount;
+        delete positionCollateralAssets[msg.sender][positionId];
+        positions[msg.sender][positionId].status = PositionStatus.CLOSED;
 
-        // Remove position by copying the last position's data
-        uint256 lastIndex = positions[msg.sender].length - 1;
-        if (positionId != lastIndex) {
-            UserPosition storage lastPosition = positions[msg.sender][lastIndex];
-            position.isIsolated = lastPosition.isIsolated;
-            position.isolatedAsset = lastPosition.isolatedAsset;
-            position.debtAmount = lastPosition.debtAmount;
-            position.lastInterestAccrual = lastPosition.lastInterestAccrual;
-
-            // Copy position assets array
-            address[] storage lastPosAssets = positionAssets[msg.sender][lastIndex];
-            for (uint256 i = 0; i < lastPosAssets.length; i++) {
-                address asset = lastPosAssets[i];
-                positionCollateralAmounts[msg.sender][positionId][asset] =
-                    positionCollateralAmounts[msg.sender][lastIndex][asset];
-            }
-            positionAssets[msg.sender][positionId] = lastPosAssets;
-        }
-
-        positions[msg.sender].pop();
         emit PositionClosed(msg.sender, positionId);
     }
 
@@ -1124,7 +910,7 @@ contract Lendefi is
      */
     function liquidate(address user, uint256 positionId)
         external
-        validPosition(user, positionId)
+        activePosition(user, positionId)
         nonReentrant
         whenNotPaused
     {
@@ -1151,7 +937,7 @@ contract Lendefi is
         uint256 liquidationBonus;
 
         if (position.isIsolated) {
-            Asset memory asset = assetInfo[position.isolatedAsset];
+            Asset memory asset = assetInfo[positionCollateralAssets[user][positionId][0]];
             liquidationBonus = tierLiquidationBonus[asset.tier];
         } else {
             CollateralTier tier = getHighestTier(user, positionId);
@@ -1162,8 +948,10 @@ contract Lendefi is
         uint256 totalDebt = debtWithInterest + (debtWithInterest * liquidationBonus / WAD);
 
         // Update position state
+        position.isIsolated = false;
         position.debtAmount = 0;
         position.lastInterestAccrual = 0;
+        position.status = PositionStatus.LIQUIDATED;
         totalBorrow -= debtWithInterest;
 
         emit Liquidated(user, positionId, debtWithInterest);
@@ -1259,7 +1047,7 @@ contract Lendefi is
      */
     function updateRewardableSupply(uint256 amount) external onlyRole(MANAGER_ROLE) {
         if (amount < 20_000 * WAD) {
-            revert RateTooLow(amount, 20_000 * WAD);
+            revert RewardableSupplyTooLow(amount, 20_000 * WAD);
         }
         rewardableSupply = amount;
         emit UpdateRewardableSupply(amount);
@@ -1327,10 +1115,10 @@ contract Lendefi is
      *      - Asset's borrow rate via tierBaseBorrowRate
      *      - Asset's liquidation bonus via tierLiquidationBonus
      */
-    function updateAssetTier(address asset, CollateralTier newTier) external onlyRole(MANAGER_ROLE) {
-        if (!listedAsset.contains(asset)) {
-            revert AssetNotListed(asset);
-        }
+    function updateAssetTier(address asset, CollateralTier newTier) external validAsset(asset) onlyRole(MANAGER_ROLE) {
+        // if (!listedAsset.contains(asset)) {
+        //     revert AssetNotListed(asset);
+        // }
 
         assetInfo[asset].tier = newTier;
 
@@ -1544,7 +1332,7 @@ contract Lendefi is
         CollateralTier tier;
 
         if (position.isIsolated) {
-            tier = assetInfo[position.isolatedAsset].tier;
+            tier = assetInfo[positionCollateralAssets[user][positionId][0]].tier;
         } else {
             tier = getHighestTier(user, positionId);
         }
@@ -1614,7 +1402,7 @@ contract Lendefi is
     {
         UserPosition storage position = positions[user][positionId];
         if (position.isIsolated) {
-            Asset memory asset = assetInfo[position.isolatedAsset];
+            Asset memory asset = assetInfo[positionCollateralAssets[user][positionId][0]];
             return tierLiquidationBonus[asset.tier];
         }
         CollateralTier tier = getHighestTier(user, positionId);
@@ -1640,27 +1428,73 @@ contract Lendefi is
         validPosition(user, positionId)
         returns (uint256)
     {
-        UserPosition storage position = positions[user][positionId];
-        uint256 totalValue;
+        UserPosition memory position = positions[user][positionId];
+        address[] memory assets = positionCollateralAssets[user][positionId];
+        uint256 totalCredit;
 
         if (position.isIsolated) {
-            Asset memory asset = assetInfo[position.isolatedAsset];
-            uint256 amount = positionCollateralAmounts[user][positionId][position.isolatedAsset];
-            uint256 price = getAssetPriceOracle(asset.oracleUSD);
-            return (amount * price * asset.borrowThreshold * WAD) / 10 ** asset.decimals / 1000
-                / 10 ** asset.oracleDecimals;
+            Asset memory item = assetInfo[assets[0]];
+            uint256 amount = positionCollateralAmounts[user][positionId][assets[0]];
+            uint256 price = getAssetPriceOracle(item.oracleUSD);
+            return
+                (amount * price * item.borrowThreshold * WAD) / 10 ** item.decimals / 1000 / 10 ** item.oracleDecimals;
         }
 
         // For cross-collateral positions
-        address[] storage assets = positionAssets[user][positionId];
         for (uint256 i = 0; i < assets.length; i++) {
             address asset = assets[i];
             uint256 amount = positionCollateralAmounts[user][positionId][asset];
             if (amount > 0) {
                 Asset memory assetConfig = assetInfo[asset];
                 uint256 price = getAssetPriceOracle(assetConfig.oracleUSD);
-                totalValue += (amount * price * assetConfig.borrowThreshold * WAD) / 10 ** assetConfig.decimals / 1000
+                totalCredit += (amount * price * assetConfig.borrowThreshold * WAD) / 10 ** assetConfig.decimals / 1000
                     / 10 ** assetConfig.oracleDecimals;
+            }
+        }
+
+        return totalCredit;
+    }
+
+    /**
+     * @notice Calculates the total USD value of all collateral assets in a position
+     * @param user The address of the position owner
+     * @param positionId The ID of the position to value
+     * @dev Calculates raw collateral value without applying any risk parameters
+     * @return uint256 The total USD value of all collateral assets (scaled by WAD)
+     * @custom:security Validates position exists via validPosition modifier
+     * @custom:calculations
+     *      - For isolated positions: returns single asset's USD value
+     *      - For cross-collateral: sums all assets' USD values
+     *      - Formula: amount * price * WAD / 10^assetDecimals / 10^oracleDecimals
+     * @custom:oracle Uses Chainlink price feeds for asset valuations
+     * @custom:difference Unlike calculateCreditLimit, this returns raw value without applying
+     *                    borrowThreshold or liquidationThreshold risk adjustments
+     */
+    function calculateCollateralValue(address user, uint256 positionId)
+        public
+        view
+        validPosition(user, positionId)
+        returns (uint256)
+    {
+        UserPosition memory position = positions[user][positionId];
+        address[] memory assets = positionCollateralAssets[user][positionId];
+        uint256 totalValue;
+
+        if (position.isIsolated) {
+            Asset memory item = assetInfo[assets[0]];
+            uint256 amount = positionCollateralAmounts[user][positionId][assets[0]];
+            uint256 price = getAssetPriceOracle(item.oracleUSD);
+            return (amount * price * WAD) / 10 ** item.decimals / 10 ** item.oracleDecimals;
+        }
+
+        // For cross-collateral positions
+        for (uint256 i = 0; i < assets.length; i++) {
+            address asset = assets[i];
+            uint256 amount = positionCollateralAmounts[user][positionId][asset];
+            if (amount > 0) {
+                Asset memory assetConfig = assetInfo[asset];
+                uint256 price = getAssetPriceOracle(assetConfig.oracleUSD);
+                totalValue += (amount * price * WAD) / 10 ** assetConfig.decimals / 10 ** assetConfig.oracleDecimals;
             }
         }
 
@@ -1683,7 +1517,7 @@ contract Lendefi is
     function isLiquidatable(address user, uint256 positionId)
         public
         view
-        validPosition(user, positionId)
+        activePosition(user, positionId)
         returns (bool)
     {
         UserPosition storage position = positions[user][positionId];
@@ -1699,16 +1533,21 @@ contract Lendefi is
      * @notice Provides a comprehensive overview of a position's current state
      * @param user The address of the position owner
      * @param positionId The ID of the position to summarize
-     * @return totalCollateralValue The total value of all collateral in the position
+     * @return totalCollateralValue The total USD value of all collateral in the position
      * @return currentDebt The current debt including accrued interest
      * @return availableCredit The remaining borrowing capacity
      * @return isIsolated Whether the position is in isolation mode
-     * @return isolatedAsset The address of the isolated asset (if applicable)
-     * @dev Aggregates key position metrics into a single view
-     * @custom:validation Checks position exists via validPosition modifier
+     * @return status The current status of the position (ACTIVE, LIQUIDATED, or CLOSED)
+     * @dev Aggregates key position metrics into a single view for frontend display and risk assessment
+     * @custom:security Validates position exists via validPosition modifier
      * @custom:calculations Uses:
-     *      - calculateCreditLimit() for collateral value
-     *      - calculateDebtWithInterest() for current debt
+     *      - calculateCollateralValue() for total collateral valuation in USD
+     *      - calculateDebtWithInterest() for current debt with accrued interest
+     *      - calculateCreditLimit() for maximum borrowing capacity
+     * @custom:position-status Returns one of the following status values:
+     *      - ACTIVE (1): Position is operational and can be modified
+     *      - LIQUIDATED (0): Position has been liquidated due to insufficient collateral
+     *      - CLOSED (2): Position has been voluntarily closed by the user
      */
     function getPositionSummary(address user, uint256 positionId)
         public
@@ -1719,16 +1558,16 @@ contract Lendefi is
             uint256 currentDebt,
             uint256 availableCredit,
             bool isIsolated,
-            address isolatedAsset
+            PositionStatus status
         )
     {
-        UserPosition storage position = positions[user][positionId];
+        UserPosition memory position = positions[user][positionId];
 
-        totalCollateralValue = calculateCreditLimit(user, positionId);
+        totalCollateralValue = calculateCollateralValue(user, positionId);
         currentDebt = calculateDebtWithInterest(user, positionId);
         availableCredit = calculateCreditLimit(user, positionId);
         isIsolated = position.isIsolated;
-        isolatedAsset = position.isolatedAsset;
+        status = position.status;
     }
 
     /**
@@ -1767,7 +1606,6 @@ contract Lendefi is
         totalSupplied = totalCollateral[asset];
         maxSupply = assetConfig.maxSupplyThreshold;
         borrowRate = getBorrowRate(assetConfig.tier);
-        // borrowRate = tierBaseBorrowRate[assetConfig.tier];
         liquidationBonus = tierLiquidationBonus[assetConfig.tier];
         tier = assetConfig.tier;
     }
@@ -1837,14 +1675,15 @@ contract Lendefi is
         returns (uint256)
     {
         uint256 debt = calculateDebtWithInterest(user, positionId);
+        uint256 liqLevel = 0; //calculateCreditLimit(user, positionId);
 
         // If no debt, return maximum possible health factor
         if (debt == 0) {
             return type(uint256).max; // Return "infinite" health factor
         }
 
-        address[] memory assets = positionAssets[user][positionId];
-        uint256 liqLevel = 0;
+        address[] memory assets = positionCollateralAssets[user][positionId];
+
         uint256 len = assets.length;
 
         for (uint256 i; i < len; ++i) {
@@ -1867,13 +1706,13 @@ contract Lendefi is
      * @return Array of addresses representing collateral assets
      * @custom:security Validates position exists via validPosition modifier
      */
-    function getPositionAssets(address user, uint256 positionId)
+    function getPositionCollateralAssets(address user, uint256 positionId)
         public
         view
         validPosition(user, positionId)
         returns (address[] memory)
     {
-        return positionAssets[user][positionId];
+        return positionCollateralAssets[user][positionId];
     }
 
     /**
@@ -2016,61 +1855,67 @@ contract Lendefi is
     }
 
     /**
-     * @notice Gets the current price from a Chainlink oracle with additional safety checks
-     * @param oracle Address of the Chainlink price feed
-     * @return uint256 Current price from the oracle (in oracle's decimals)
-     * @dev Implements multiple safety checks for price validity:
-     *      1. Basic oracle health checks
-     *      2. Price volatility monitoring
-     *      3. Timestamp freshness verification
-     * @custom:validation Checks:
-     *      - Price must be positive
-     *      - Round must be complete (answeredInRound >= roundId)
-     *      - Price must not be stale (< 8 hours old)
-     *      - For high volatility (>20% change):
-     *          * Price must be fresh (< 1 hour old)
-     * @custom:errors Throws:
-     *      - OracleInvalidPrice: If price <= 0
-     *      - OracleStalePrice: If round not complete
-     *      - OracleTimeout: If price too old
-     *      - OracleInvalidPriceVolatility: If high volatility with stale price
+     * @notice Retrieves a secure price feed from Chainlink oracle with multiple safety validations
+     * @param oracle The address of the Chainlink price feed oracle
+     * @return Price in USD with oracle's native decimal precision
+     * @dev Implements comprehensive safety measures to ensure price reliability:
+     *      1. Core validations:
+     *         - Ensures reported price is positive
+     *         - Verifies the oracle round is complete and answered
+     *         - Checks price data freshness (< 8 hours old)
+     *      2. Volatility protection:
+     *         - For price changes > 20%, requires fresher data (< 1 hour old)
+     *         - Compares current price against previous round data
+     *         - Prevents manipulation through large short-term price movements
+     * @custom:security-layer Designed as a critical security component for accurate asset valuation
+     * @custom:error-cases
+     *      - OracleInvalidPrice: Price must be > 0
+     *      - OracleStalePrice: Oracle must have answered for the current round
+     *      - OracleTimeout: Price timestamp must be recent (within 8 hours)
+     *      - OracleInvalidPriceVolatility: High volatility prices must be fresh (within 1 hour)
      */
     function getAssetPriceOracle(address oracle) public view returns (uint256) {
+        // Fetch latest data from Chainlink oracle
         (uint80 roundId, int256 price,, uint256 timestamp, uint80 answeredInRound) =
             AggregatorV3Interface(oracle).latestRoundData();
+
+        // Core validations - price must be positive
         if (price <= 0) {
             revert OracleInvalidPrice(oracle, price);
         }
+
+        // Ensure round is complete and answered
         if (answeredInRound < roundId) {
             revert OracleStalePrice(oracle, roundId, answeredInRound);
         }
-        if (block.timestamp - timestamp > 8 hours) {
+
+        // Verify price data freshness - must be less than 8 hours old
+        uint256 age = block.timestamp - timestamp;
+        if (age > 8 hours) {
             revert OracleTimeout(oracle, timestamp, block.timestamp, 8 hours);
         }
 
-        // Additional safety: check for extreme price movements
+        // Volatility protection - for significant price movements, enforce stricter freshness
         if (roundId > 1) {
+            // Fetch previous round data to compare
             (, int256 previousPrice,, uint256 previousTimestamp,) =
                 AggregatorV3Interface(oracle).getRoundData(roundId - 1);
 
+            // Only evaluate valid historical data points
             if (previousPrice > 0 && previousTimestamp > 0) {
-                // If price changed by more than 20% in a single update, additional checks
-                uint256 priceDelta;
-                if (price > previousPrice) {
-                    priceDelta = uint256(price - previousPrice);
-                } else {
-                    priceDelta = uint256(previousPrice - price);
-                }
+                // Calculate price change percentage
+                uint256 priceDelta =
+                    price > previousPrice ? uint256(price - previousPrice) : uint256(previousPrice - price);
 
                 uint256 changePercent = (priceDelta * 100) / uint256(previousPrice);
-                if (changePercent >= 20) {
-                    // For high-volatility updates, require fresher data
-                    if (block.timestamp - timestamp >= 1 hours) {
-                        revert OracleInvalidPriceVolatility(oracle, price, changePercent);
-                    }
+
+                // For high volatility (>=20% change), require fresher data (< 1 hour old)
+                if (changePercent >= 20 && age >= 1 hours) {
+                    revert OracleInvalidPriceVolatility(oracle, price, changePercent);
                 }
             }
         }
+
         return uint256(price);
     }
 
@@ -2101,7 +1946,7 @@ contract Lendefi is
     {
         CollateralTier tier = CollateralTier.STABLE;
 
-        address[] storage assets = positionAssets[user][positionId];
+        address[] storage assets = positionCollateralAssets[user][positionId];
         for (uint256 i = 0; i < assets.length; i++) {
             address asset = assets[i];
             uint256 amount = positionCollateralAmounts[user][positionId][asset];
@@ -2162,7 +2007,7 @@ contract Lendefi is
      *      - WithdrawCollateral for each asset transferred
      */
     function _transferCollateralToLiquidator(address user, uint256 positionId, address liquidator) internal {
-        address[] storage posAssets = positionAssets[user][positionId];
+        address[] storage posAssets = positionCollateralAssets[user][positionId];
 
         // Transfer all collateral to liquidator
         for (uint256 i = 0; i < posAssets.length; i++) {
@@ -2177,7 +2022,7 @@ contract Lendefi is
         }
 
         // Clear position assets array
-        delete positionAssets[user][positionId];
+        delete positionCollateralAssets[user][positionId];
     }
 
     /**
