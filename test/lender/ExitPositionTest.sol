@@ -13,7 +13,6 @@ contract ExitPositionTest is BasicDeploy {
     // Events to verify
     event Repay(address indexed user, uint256 indexed positionId, uint256 amount);
     event WithdrawCollateral(address indexed user, uint256 indexed positionId, address indexed asset, uint256 amount);
-    event ExitedIsolationMode(address indexed user, uint256 indexed positionId);
     event PositionClosed(address indexed user, uint256 indexed positionId);
 
     TokenMock internal rwaToken;
@@ -205,8 +204,17 @@ contract ExitPositionTest is BasicDeploy {
         uint256 finalBobWeth = wethInstance.balanceOf(bob);
         uint256 finalPositionsCount = LendefiInstance.getUserPositionsCount(bob);
 
+        // Check collateral is returned
         assertEq(finalBobWeth, initialBobWeth + collateralAmount, "Collateral should be returned to user");
-        assertEq(finalPositionsCount, initialPositionsCount - 1, "Position should be closed");
+
+        // Position count remains the same since we now mark as closed instead of deleting
+        assertEq(finalPositionsCount, initialPositionsCount, "Position count should remain the same");
+
+        // Check position is marked as closed
+        IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        assertEq(
+            uint256(position.status), uint256(IPROTOCOL.PositionStatus.CLOSED), "Position should be marked as CLOSED"
+        );
     }
 
     // Test 2: Exit position with debt
@@ -252,9 +260,14 @@ contract ExitPositionTest is BasicDeploy {
         assertEq(finalBobUSDC, initialBobUSDC - debtWithInterest, "USDC should be used for repayment");
         assertEq(finalTotalBorrow, initialTotalBorrow - debtWithInterest, "Total borrow should decrease");
 
-        // Check position is gone
-        uint256 finalPositionsCount = LendefiInstance.getUserPositionsCount(bob);
-        assertEq(finalPositionsCount, 0, "Position should be closed");
+        // Check position is marked as closed
+        IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        assertEq(
+            uint256(position.status), uint256(IPROTOCOL.PositionStatus.CLOSED), "Position should be marked as CLOSED"
+        );
+
+        // Verify position debt is cleared
+        assertEq(position.debtAmount, 0, "Position debt should be cleared");
     }
 
     // Test 3: Exit isolated position
@@ -266,17 +279,22 @@ contract ExitPositionTest is BasicDeploy {
 
         vm.startPrank(bob);
 
-        // Expect exit isolation mode event
-        vm.expectEmit(true, true, false, false);
-        emit ExitedIsolationMode(bob, positionId);
-
         // Exit position
         LendefiInstance.exitPosition(positionId);
         vm.stopPrank();
 
-        // Verify position is gone and isolation mode is exited
-        uint256 finalPositionsCount = LendefiInstance.getUserPositionsCount(bob);
-        assertEq(finalPositionsCount, 0, "Position should be closed");
+        // Verify position is marked as closed
+        IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        assertEq(
+            uint256(position.status), uint256(IPROTOCOL.PositionStatus.CLOSED), "Position should be marked as CLOSED"
+        );
+
+        // Verify isolated flag is preserved but no collateral remains
+        assertTrue(position.isIsolated, "Position should still have isIsolated flag");
+
+        // Check collateral is returned
+        uint256 remainingCollateral = LendefiInstance.getUserCollateralAmount(bob, positionId, address(rwaToken));
+        assertEq(remainingCollateral, 0, "No collateral should remain in position");
     }
 
     // Test 4: Exit position with multiple assets
@@ -304,10 +322,22 @@ contract ExitPositionTest is BasicDeploy {
 
         assertEq(finalBobWeth, initialBobWeth + wethAmount, "WETH should be returned to user");
         assertEq(finalBobStable, initialBobStable + stableAmount, "Stable tokens should be returned to user");
+
+        // Verify position is marked as closed
+        IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        assertEq(
+            uint256(position.status), uint256(IPROTOCOL.PositionStatus.CLOSED), "Position should be marked as CLOSED"
+        );
+
+        // Check no collateral remains
+        uint256 remainingWeth = LendefiInstance.getUserCollateralAmount(bob, positionId, address(wethInstance));
+        uint256 remainingStable = LendefiInstance.getUserCollateralAmount(bob, positionId, address(stableToken));
+
+        assertEq(remainingWeth, 0, "No WETH collateral should remain");
+        assertEq(remainingStable, 0, "No stable collateral should remain");
     }
 
     // Test 5: Exit position with insufficient USDC for debt repayment
-    // Fix the test to ensure bob has no USDC balance
     function test_ExitPositionInsufficientUSDC() public {
         // Setup position with debt
         uint256 collateralAmount = 10 ether;
@@ -337,7 +367,7 @@ contract ExitPositionTest is BasicDeploy {
         // Try to exit position without enough USDC
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.InsufficientTokenBalance.selector,
+                IPROTOCOL.InsufficientTokenBalance.selector,
                 address(usdcInstance),
                 bob,
                 0 // Bob's USDC balance is 0
@@ -345,66 +375,81 @@ contract ExitPositionTest is BasicDeploy {
         );
         LendefiInstance.exitPosition(positionId);
         vm.stopPrank();
+
+        // Verify position is still active
+        IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        assertEq(uint256(position.status), uint256(IPROTOCOL.PositionStatus.ACTIVE), "Position should remain ACTIVE");
     }
 
-    // Test 6: Exit position when it's not the last position (test position swap logic)
-    function test_ExitPositionNotLast() public {
+    // Test 6: Check multiple positions remain with correct status after exiting one
+    function test_MultiplePositionsStatuses() public {
         // Create multiple positions
-        uint256 position1 = _createPosition(bob, address(wethInstance), false);
-        uint256 position2 = _createPosition(bob, address(stableToken), false);
+        uint256 position0 = _createPosition(bob, address(wethInstance), false);
+        uint256 position1 = _createPosition(bob, address(stableToken), false);
 
         // Supply collateral to both positions
-        _supplyCollateral(bob, address(wethInstance), 5 ether, position1);
-        _supplyCollateral(bob, address(stableToken), 1000 ether, position2);
+        _supplyCollateral(bob, address(wethInstance), 5 ether, position0);
+        _supplyCollateral(bob, address(stableToken), 1000 ether, position1);
 
-        // Borrow with position2
-        _borrowUSDC(bob, position2, 200e6);
+        // Borrow with position1
+        _borrowUSDC(bob, position1, 200e6);
 
-        // Remember position2 details for verification
-        IPROTOCOL.UserPosition memory position2View = LendefiInstance.getUserPosition(bob, position2);
-        uint256 position2Debt = position2View.debtAmount;
-        uint256 position2Collateral = LendefiInstance.getUserCollateralAmount(bob, position2, address(stableToken));
-
-        // Exit position1 (not the last)
+        // Exit position0
         vm.startPrank(bob);
-        LendefiInstance.exitPosition(position1);
+        LendefiInstance.exitPosition(position0);
         vm.stopPrank();
 
-        // Verify position1 is now replaced by what was position2
-        IPROTOCOL.UserPosition memory swappedPosition = LendefiInstance.getUserPosition(bob, position1);
-        uint256 swappedCollateral = LendefiInstance.getUserCollateralAmount(bob, position1, address(stableToken));
+        // Verify position0 is marked as closed
+        IPROTOCOL.UserPosition memory position0View = LendefiInstance.getUserPosition(bob, position0);
+        assertEq(
+            uint256(position0View.status),
+            uint256(IPROTOCOL.PositionStatus.CLOSED),
+            "Position 0 should be marked as CLOSED"
+        );
 
-        // Check position data was correctly swapped
-        assertEq(swappedPosition.debtAmount, position2Debt, "Debt should match position 2");
-        assertEq(swappedCollateral, position2Collateral, "Collateral should match position 2");
+        // Verify position1 remains active
+        IPROTOCOL.UserPosition memory position1View = LendefiInstance.getUserPosition(bob, position1);
+        assertEq(
+            uint256(position1View.status), uint256(IPROTOCOL.PositionStatus.ACTIVE), "Position 1 should remain ACTIVE"
+        );
 
-        // Verify there's now only one position
-        uint256 finalPositionsCount = LendefiInstance.getUserPositionsCount(bob);
-        assertEq(finalPositionsCount, 1, "Should have only one position left");
+        // Verify position count remains the same
+        uint256 positionsCount = LendefiInstance.getUserPositionsCount(bob);
+        assertEq(positionsCount, 2, "Position count should remain 2");
     }
 
-    // Test 7: Exit position when it's the last position
-    function test_ExitPositionLast() public {
-        // Create multiple positions
-        uint256 position1 = _createPosition(bob, address(wethInstance), false);
-        uint256 position2 = _createPosition(bob, address(stableToken), false);
+    // Test 7: Exit and reuse position ID
+    function test_ExitAndReusePosition() public {
+        // Create and exit a position
+        uint256 positionId = _createPosition(bob, address(wethInstance), false);
+        _supplyCollateral(bob, address(wethInstance), 5 ether, positionId);
 
-        // Supply collateral to both
-        _supplyCollateral(bob, address(wethInstance), 5 ether, position1);
-        _supplyCollateral(bob, address(stableToken), 1000 ether, position2);
-
-        // Exit position2 (the last one)
         vm.startPrank(bob);
-        LendefiInstance.exitPosition(position2);
+        LendefiInstance.exitPosition(positionId);
+
+        // Position is now closed
+        IPROTOCOL.UserPosition memory closedPosition = LendefiInstance.getUserPosition(bob, positionId);
+        assertEq(
+            uint256(closedPosition.status),
+            uint256(IPROTOCOL.PositionStatus.CLOSED),
+            "Position should be marked as CLOSED"
+        );
+
+        // Cannot supply collateral to closed position
+        _mintTokens(bob, address(stableToken), 1000 ether);
+        IERC20(address(stableToken)).approve(address(LendefiInstance), 1000 ether);
+
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InactivePosition.selector, bob, positionId));
+        LendefiInstance.supplyCollateral(address(stableToken), 1000 ether, positionId);
         vm.stopPrank();
 
-        // Verify there's only position1 left
-        uint256 finalPositionsCount = LendefiInstance.getUserPositionsCount(bob);
-        assertEq(finalPositionsCount, 1, "Should have only one position left");
+        // Create new position - should have different ID
+        uint256 newPositionId = _createPosition(bob, address(stableToken), false);
+        assertEq(newPositionId, 1, "New position should have ID 1");
 
-        // Position1 should still have its original data
-        uint256 position1Collateral = LendefiInstance.getUserCollateralAmount(bob, position1, address(wethInstance));
-        assertEq(position1Collateral, 5 ether, "Position 1 collateral should be unchanged");
+        // New position should be active
+        IPROTOCOL.UserPosition memory newPosition = LendefiInstance.getUserPosition(bob, newPositionId);
+        assertEq(uint256(newPosition.status), uint256(IPROTOCOL.PositionStatus.ACTIVE), "New position should be ACTIVE");
     }
 
     // Test 8: Exit position with zero collateral
@@ -418,9 +463,11 @@ contract ExitPositionTest is BasicDeploy {
         LendefiInstance.exitPosition(positionId);
         vm.stopPrank();
 
-        // Verify position is gone
-        uint256 finalPositionsCount = LendefiInstance.getUserPositionsCount(bob);
-        assertEq(finalPositionsCount, 0, "Position should be closed");
+        // Verify position is closed
+        IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        assertEq(
+            uint256(position.status), uint256(IPROTOCOL.PositionStatus.CLOSED), "Position should be marked as CLOSED"
+        );
     }
 
     // Test 9: Exit invalid position
@@ -430,7 +477,7 @@ contract ExitPositionTest is BasicDeploy {
         uint256 invalidPositionId = 999;
 
         // Try to exit a non-existent position
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, bob, invalidPositionId));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, bob, invalidPositionId));
         LendefiInstance.exitPosition(invalidPositionId);
         vm.stopPrank();
     }
@@ -452,6 +499,10 @@ contract ExitPositionTest is BasicDeploy {
         vm.expectRevert(expError);
         LendefiInstance.exitPosition(positionId);
         vm.stopPrank();
+
+        // Verify position remains active
+        IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        assertEq(uint256(position.status), uint256(IPROTOCOL.PositionStatus.ACTIVE), "Position should remain ACTIVE");
     }
 
     // Test 11: Exit isolated position with debt
@@ -469,99 +520,79 @@ contract ExitPositionTest is BasicDeploy {
         vm.startPrank(bob);
         usdcInstance.approve(address(LendefiInstance), type(uint256).max);
 
-        // Expect events for debt repayment, collateral withdrawal, and isolation exit
-        uint256 debtWithInterest = LendefiInstance.calculateDebtWithInterest(bob, positionId);
-
-        vm.expectEmit(true, true, false, true);
-        emit Repay(bob, positionId, debtWithInterest);
-
-        vm.expectEmit(true, true, false, false);
-        emit ExitedIsolationMode(bob, positionId);
+        // Calculate debt with interest
+        // uint256 debtWithInterest = LendefiInstance.calculateDebtWithInterest(bob, positionId);
 
         // Exit position
         LendefiInstance.exitPosition(positionId);
         vm.stopPrank();
 
-        // Verify position is gone and tokens were correctly transferred
-        uint256 finalPositionsCount = LendefiInstance.getUserPositionsCount(bob);
-        assertEq(finalPositionsCount, 0, "Position should be closed");
+        // Verify position is closed and debt cleared
+        IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        assertEq(
+            uint256(position.status), uint256(IPROTOCOL.PositionStatus.CLOSED), "Position should be marked as CLOSED"
+        );
+        assertEq(position.debtAmount, 0, "Position debt should be cleared");
     }
 
-    // Fix the array out-of-bounds access in the fuzz test
-    function testFuzz_ExitMultiplePositions(uint256 seed) public {
-        // Assume reasonable seed values to avoid excessive iteration
-        vm.assume(seed > 0);
-        vm.assume(seed <= type(uint64).max);
+    // Test 12: Check storage slots after exit
+    function test_StorageSlotsAfterExit() public {
+        // Create position with collateral
+        uint256 positionId = _createPosition(bob, address(wethInstance), false);
+        _supplyCollateral(bob, address(wethInstance), 5 ether, positionId);
+        _supplyCollateral(bob, address(stableToken), 1000 ether, positionId);
 
-        // Calculate number of positions (1-3)
-        uint256 numPositions = (seed % 3) + 1;
+        // Exit position
+        vm.startPrank(bob);
+        LendefiInstance.exitPosition(positionId);
+        vm.stopPrank();
 
-        // Setup available assets
-        address[] memory availableAssets = new address[](3);
-        availableAssets[0] = address(wethInstance);
-        availableAssets[1] = address(stableToken);
-        availableAssets[2] = address(crossBToken);
+        // Check position's collateral arrays are empty
+        address[] memory collateralAssets = LendefiInstance.getPositionCollateralAssets(bob, positionId);
+        assertEq(collateralAssets.length, 0, "Position's collateral assets array should be empty");
 
-        // Track initial balances
-        uint256[] memory initialBalances = new uint256[](3);
-        initialBalances[0] = wethInstance.balanceOf(bob);
-        initialBalances[1] = stableToken.balanceOf(bob);
-        initialBalances[2] = crossBToken.balanceOf(bob);
+        // Ensure collateral storage is properly cleared
+        uint256 wethAmount = LendefiInstance.getUserCollateralAmount(bob, positionId, address(wethInstance));
+        uint256 stableAmount = LendefiInstance.getUserCollateralAmount(bob, positionId, address(stableToken));
 
-        // Store amounts for later verification
-        uint256[] memory suppliedAmounts = new uint256[](numPositions);
-        address[] memory usedAssets = new address[](numPositions);
-
-        // Create positions and supply collateral
-        for (uint256 i = 0; i < numPositions; i++) {
-            // Select asset deterministically but with good distribution
-            uint256 assetIndex = uint256(keccak256(abi.encode(seed, i))) % 3;
-            address asset = availableAssets[assetIndex];
-            usedAssets[i] = asset;
-
-            // Create position
-            uint256 positionId = _createPosition(bob, asset, false);
-
-            // Calculate collateral amount (1-10 ETH equivalent)
-            uint256 amount = 1 ether + (uint256(keccak256(abi.encode(seed, i, "amount"))) % 9 ether);
-            suppliedAmounts[i] = amount;
-
-            // Supply collateral
-            _supplyCollateral(bob, asset, amount, positionId);
-        }
-
-        // Exit all positions using position 0
-        uint256 remainingPositions = LendefiInstance.getUserPositionsCount(bob);
-        for (uint256 i = 0; i < remainingPositions; i++) {
-            vm.startPrank(bob);
-            LendefiInstance.exitPosition(0);
-            vm.stopPrank();
-        }
-
-        // Verify all positions closed
-        assertEq(LendefiInstance.getUserPositionsCount(bob), 0, "All positions should be closed");
-
-        // Verify balances increased appropriately
-        bool someTokensReturned = false;
-        for (uint256 i = 0; i < 3; i++) {
-            uint256 finalBalance;
-            if (i == 0) finalBalance = wethInstance.balanceOf(bob);
-            else if (i == 1) finalBalance = stableToken.balanceOf(bob);
-            else finalBalance = crossBToken.balanceOf(bob);
-
-            // Check if this asset was used
-            for (uint256 j = 0; j < numPositions; j++) {
-                if (usedAssets[j] == availableAssets[i]) {
-                    assertTrue(finalBalance > initialBalances[i], "Balance should increase for used assets");
-                    someTokensReturned = true;
-                }
-            }
-        }
-
-        assertTrue(someTokensReturned, "At least one asset should be returned");
+        assertEq(wethAmount, 0, "WETH collateral amount should be zero");
+        assertEq(stableAmount, 0, "Stable collateral amount should be zero");
     }
 
-    // Fuzz Test 2: Exit positions with varying debt amounts
+    // Test 13: Verify position summary after exit
+    function test_PositionSummaryAfterExit() public {
+        // Create position with collateral and debt
+        uint256 positionId = _createPosition(bob, address(wethInstance), false);
+        _supplyCollateral(bob, address(wethInstance), 5 ether, positionId);
+        _borrowUSDC(bob, positionId, 1000e6);
+
+        // Mint USDC for repayment
+        usdcInstance.mint(bob, 2000e6);
+
+        // Exit position
+        vm.startPrank(bob);
+        usdcInstance.approve(address(LendefiInstance), type(uint256).max);
+        LendefiInstance.exitPosition(positionId);
+        vm.stopPrank();
+
+        // Get position summary
+        (
+            uint256 totalCollateralValue,
+            uint256 currentDebt,
+            uint256 availableCredit,
+            bool isIsolated,
+            IPROTOCOL.PositionStatus status
+        ) = LendefiInstance.getPositionSummary(bob, positionId);
+
+        // Verify summary values
+        assertEq(totalCollateralValue, 0, "Collateral value should be zero");
+        assertEq(currentDebt, 0, "Debt should be zero");
+        assertEq(availableCredit, 0, "Available credit should be zero");
+        assertFalse(isIsolated, "Position should not be isolated");
+        assertEq(uint256(status), uint256(IPROTOCOL.PositionStatus.CLOSED), "Status should be CLOSED");
+    }
+
+    // Fuzz Test: Exit positions with varying debt amounts
     function testFuzz_ExitPositionsWithVaryingDebt(uint256 debtPct) public {
         // Bound debt percentage to reasonable values (1-50%)
         debtPct = bound(debtPct, 1, 50);
@@ -594,12 +625,15 @@ contract ExitPositionTest is BasicDeploy {
         LendefiInstance.exitPosition(positionId);
         vm.stopPrank();
 
-        // Verify position is closed
-        uint256 finalPositionsCount = LendefiInstance.getUserPositionsCount(bob);
-        assertEq(finalPositionsCount, 0, "Position should be closed");
+        // Verify position is closed with proper status
+        IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        assertEq(
+            uint256(position.status), uint256(IPROTOCOL.PositionStatus.CLOSED), "Position should be marked as CLOSED"
+        );
 
-        // Verify collateral returned
-        uint256 finalBobWeth = wethInstance.balanceOf(bob);
-        assertTrue(finalBobWeth >= collateralAmount, "Collateral should be returned to user");
+        // Verify debt and collateral are cleared
+        assertEq(position.debtAmount, 0, "Position debt should be cleared");
+        uint256 remainingCollateral = LendefiInstance.getUserCollateralAmount(bob, positionId, address(wethInstance));
+        assertEq(remainingCollateral, 0, "No collateral should remain");
     }
 }
