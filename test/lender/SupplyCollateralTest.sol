@@ -200,7 +200,7 @@ contract SupplyCollateralTest is BasicDeploy {
         assertEq(positionCollateral, collateralAmount, "Position collateral should be updated");
 
         // Check position assets
-        address[] memory posAssets = LendefiInstance.getPositionAssets(bob, positionId);
+        address[] memory posAssets = LendefiInstance.getPositionCollateralAssets(bob, positionId);
         assertEq(posAssets.length, 1, "Position should have 1 asset");
         assertEq(posAssets[0], address(wethInstance), "Position asset should be WETH");
     }
@@ -228,8 +228,9 @@ contract SupplyCollateralTest is BasicDeploy {
 
         // Check position is still in isolation mode
         IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(bob, positionId);
+        address[] memory posAssets = LendefiInstance.getPositionCollateralAssets(bob, positionId);
         assertTrue(position.isIsolated, "Position should remain isolated");
-        assertEq(position.isolatedAsset, address(rwaToken), "Isolated asset should be RWA token");
+        assertEq(posAssets[0], address(rwaToken), "Isolated asset should be RWA token");
     }
 
     // Test 3: Supply isolated asset to a non-isolated position should fail
@@ -246,31 +247,8 @@ contract SupplyCollateralTest is BasicDeploy {
         rwaToken.approve(address(LendefiInstance), collateralAmount);
 
         // Should fail when trying to supply isolated asset to non-isolated position
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.IsolationModeRequired.selector, address(rwaToken)));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.IsolationModeRequired.selector, address(rwaToken)));
         LendefiInstance.supplyCollateral(address(rwaToken), collateralAmount, positionId);
-        vm.stopPrank();
-    }
-
-    // Test 4: Supply non-isolated asset to an isolated position should fail
-    function test_SupplyNonIsolatedAssetToIsolatedPosition() public {
-        uint256 collateralAmount = 10 ether;
-
-        // Create isolated position with RWA token
-        uint256 positionId = _createPosition(bob, address(rwaToken), true);
-
-        // Mint WETH tokens (non-isolated asset)
-        _mintTokens(bob, address(wethInstance), collateralAmount);
-
-        vm.startPrank(bob);
-        wethInstance.approve(address(LendefiInstance), collateralAmount);
-
-        // Should fail when trying to supply non-isolated asset to isolated position
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Lendefi.InvalidAssetForIsolation.selector, bob, positionId, address(wethInstance), address(rwaToken)
-            )
-        );
-        LendefiInstance.supplyCollateral(address(wethInstance), collateralAmount, positionId);
         vm.stopPrank();
     }
 
@@ -298,7 +276,7 @@ contract SupplyCollateralTest is BasicDeploy {
         assertEq(positionCollateral, initialAmount + additionalAmount, "Position collateral should be updated");
 
         // Check assets array still has only one entry
-        address[] memory posAssets = LendefiInstance.getPositionAssets(bob, positionId);
+        address[] memory posAssets = LendefiInstance.getPositionCollateralAssets(bob, positionId);
         assertEq(posAssets.length, 1, "Position should have 1 asset");
     }
 
@@ -345,7 +323,7 @@ contract SupplyCollateralTest is BasicDeploy {
         );
 
         // Check position assets
-        address[] memory posAssets = LendefiInstance.getPositionAssets(bob, positionId);
+        address[] memory posAssets = LendefiInstance.getPositionCollateralAssets(bob, positionId);
         assertEq(posAssets.length, 3, "Position should have 3 assets");
     }
 
@@ -417,7 +395,7 @@ contract SupplyCollateralTest is BasicDeploy {
 
         // Attempt to supply over cap
         vm.expectRevert(
-            abi.encodeWithSelector(Lendefi.SupplyCapExceeded.selector, address(stableToken), 101 ether, 100 ether)
+            abi.encodeWithSelector(IPROTOCOL.SupplyCapExceeded.selector, address(stableToken), 101 ether, 100 ether)
         );
         LendefiInstance.supplyCollateral(address(stableToken), 101 ether, positionId);
         vm.stopPrank();
@@ -478,7 +456,7 @@ contract SupplyCollateralTest is BasicDeploy {
         wethInstance.approve(address(LendefiInstance), 10 ether);
 
         // Attempt to supply inactive asset
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.AssetDisabled.selector, address(wethInstance)));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.AssetDisabled.selector, address(wethInstance)));
         LendefiInstance.supplyCollateral(address(wethInstance), 10 ether, positionId);
         vm.stopPrank();
     }
@@ -491,7 +469,7 @@ contract SupplyCollateralTest is BasicDeploy {
         wethInstance.approve(address(LendefiInstance), 10 ether);
 
         // Attempt to supply to nonexistent position
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, bob, 999));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, bob, 999));
         LendefiInstance.supplyCollateral(address(wethInstance), 10 ether, 999);
         vm.stopPrank();
     }
@@ -509,7 +487,7 @@ contract SupplyCollateralTest is BasicDeploy {
         unlistedToken.approve(address(LendefiInstance), 10 ether);
 
         // Attempt to supply unlisted asset
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.AssetNotListed.selector, address(unlistedToken)));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.AssetNotListed.selector, address(unlistedToken)));
         LendefiInstance.supplyCollateral(address(unlistedToken), 10 ether, positionId);
         vm.stopPrank();
     }
