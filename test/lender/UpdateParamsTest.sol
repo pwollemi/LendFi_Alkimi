@@ -336,7 +336,7 @@ contract UpdateProtocolParametersTest is BasicDeploy {
     function test_UpdateBaseProfitTarget_MinimumValue() public {
         // Should revert if rate is too low
         vm.prank(address(timelockInstance));
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.RateTooLow.selector, MIN_BASE_PROFIT_TARGET - 1, 0.0025e6));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.RateTooLow.selector, MIN_BASE_PROFIT_TARGET - 1, 0.0025e6));
         LendefiInstance.updateBaseProfitTarget(MIN_BASE_PROFIT_TARGET - 1);
 
         // Should succeed with minimum value
@@ -347,7 +347,7 @@ contract UpdateProtocolParametersTest is BasicDeploy {
     function test_UpdateBaseBorrowRate_MinimumValue() public {
         // Should revert if rate is too low
         vm.prank(address(timelockInstance));
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.RateTooLow.selector, MIN_BASE_BORROW_RATE - 1, 0.01e6));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.RateTooLow.selector, MIN_BASE_BORROW_RATE - 1, 0.01e6));
         LendefiInstance.updateBaseBorrowRate(MIN_BASE_BORROW_RATE - 1);
 
         // Should succeed with minimum value
@@ -359,7 +359,7 @@ contract UpdateProtocolParametersTest is BasicDeploy {
         // Should revert if interval is too short
         vm.prank(address(timelockInstance));
         vm.expectRevert(
-            abi.encodeWithSelector(Lendefi.RewardIntervalTooShort.selector, MIN_REWARD_INTERVAL - 1, 90 days)
+            abi.encodeWithSelector(IPROTOCOL.RewardIntervalTooShort.selector, MIN_REWARD_INTERVAL - 1, 90 days)
         );
         LendefiInstance.updateRewardInterval(MIN_REWARD_INTERVAL - 1);
 
@@ -375,7 +375,7 @@ contract UpdateProtocolParametersTest is BasicDeploy {
         // Fix: Update expected error parameter to match the constant MIN_REWARDABLE_SUPPLY
         vm.expectRevert(
             abi.encodeWithSelector(
-                Lendefi.RateTooLow.selector,
+                IPROTOCOL.RewardableSupplyTooLow.selector,
                 MIN_REWARDABLE_SUPPLY - 1, // The attempted value
                 20_000e6 // The minimum required value
             )
@@ -392,7 +392,7 @@ contract UpdateProtocolParametersTest is BasicDeploy {
         // Should revert if amount is too low
         vm.prank(address(timelockInstance));
         vm.expectRevert(
-            abi.encodeWithSelector(Lendefi.LiquidatorThresholdTooLow.selector, MIN_LIQUIDATOR_THRESHOLD - 1, 10 ether)
+            abi.encodeWithSelector(IPROTOCOL.LiquidatorThresholdTooLow.selector, MIN_LIQUIDATOR_THRESHOLD - 1, 10 ether)
         );
         LendefiInstance.updateLiquidatorThreshold(MIN_LIQUIDATOR_THRESHOLD - 1);
 
