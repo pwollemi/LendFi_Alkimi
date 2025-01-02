@@ -110,10 +110,11 @@ contract GetUserPositionTest is BasicDeploy {
 
         // Get the position
         IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(alice, positionId);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(alice, positionId);
 
         // Verify initial state
         assertEq(position.isIsolated, false, "Position should not be isolated");
-        assertEq(position.isolatedAsset, address(0), "Isolated asset should be zero address");
+        assertEq(assets.length, 0, "Non Isolated asset should be zero address");
         assertEq(position.debtAmount, 0, "Debt amount should be zero");
         assertEq(position.lastInterestAccrual, 0, "Last interest accrual should be zero");
     }
@@ -136,10 +137,11 @@ contract GetUserPositionTest is BasicDeploy {
 
         // Get the position
         IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(alice, positionId);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(alice, positionId);
 
         // Verify state after adding collateral
         assertEq(position.isIsolated, false, "Position should not be isolated");
-        assertEq(position.isolatedAsset, address(0), "Isolated asset should be zero address");
+        assertEq(assets[0], address(wethInstance), "Non Isolated asset should not be zero address");
         assertEq(position.debtAmount, 0, "Debt amount should be zero");
         assertEq(position.lastInterestAccrual, 0, "Last interest accrual should be zero");
 
@@ -173,10 +175,11 @@ contract GetUserPositionTest is BasicDeploy {
 
         // Get the position
         IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(alice, positionId);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(alice, positionId);
 
         // Verify state after borrowing
         assertEq(position.isIsolated, false, "Position should not be isolated");
-        assertEq(position.isolatedAsset, address(0), "Isolated asset should be zero address");
+        assertEq(assets[0], address(wethInstance), "Non Isolated asset should be weth address");
         assertEq(position.debtAmount, borrowAmount, "Debt amount should match borrowed amount");
         assertEq(position.lastInterestAccrual, currentTimestamp, "Last interest accrual should be current timestamp");
     }
@@ -190,10 +193,11 @@ contract GetUserPositionTest is BasicDeploy {
 
         // Get the position
         IPROTOCOL.UserPosition memory position = LendefiInstance.getUserPosition(alice, positionId);
+        address[] memory assets = LendefiInstance.getPositionCollateralAssets(alice, positionId);
 
         // Verify isolated position state
         assertEq(position.isIsolated, true, "Position should be isolated");
-        assertEq(position.isolatedAsset, address(wethInstance), "Isolated asset should be WETH");
+        assertEq(assets[0], address(wethInstance), "Isolated asset should be WETH");
         assertEq(position.debtAmount, 0, "Debt amount should be zero");
         assertEq(position.lastInterestAccrual, 0, "Last interest accrual should be zero");
     }
@@ -214,19 +218,21 @@ contract GetUserPositionTest is BasicDeploy {
         // Get both positions
         IPROTOCOL.UserPosition memory position1 = LendefiInstance.getUserPosition(alice, positionId1);
         IPROTOCOL.UserPosition memory position2 = LendefiInstance.getUserPosition(alice, positionId2);
+        address[] memory assets1 = LendefiInstance.getPositionCollateralAssets(alice, positionId1);
+        address[] memory assets2 = LendefiInstance.getPositionCollateralAssets(alice, positionId2);
 
         // Verify position 1
         assertEq(position1.isIsolated, false, "Position 1 should not be isolated");
-        assertEq(position1.isolatedAsset, address(0), "Position 1 isolated asset should be zero address");
+        assertEq(assets1.length, 0, "Position 1 isolated asset should be zero address");
 
         // Verify position 2
         assertEq(position2.isIsolated, true, "Position 2 should be isolated");
-        assertEq(position2.isolatedAsset, address(usdcInstance), "Position 2 isolated asset should be USDC");
+        assertEq(assets2[0], address(usdcInstance), "Position 2 isolated asset should be USDC");
     }
 
     function test_GetUserPosition_InvalidPosition() public {
         // Try to get a position that doesn't exist
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, alice, 0));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, alice, 0));
         LendefiInstance.getUserPosition(alice, 0);
 
         // Create a position
@@ -238,7 +244,7 @@ contract GetUserPositionTest is BasicDeploy {
         LendefiInstance.getUserPosition(alice, 0);
 
         // But invalid with position ID 1
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, alice, 1));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, alice, 1));
         LendefiInstance.getUserPosition(alice, 1);
     }
 
