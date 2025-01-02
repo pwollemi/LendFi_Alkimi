@@ -247,7 +247,7 @@ contract getPositionLiquidationFeeTest is BasicDeploy {
 
     function test_getPositionLiquidationFee_InvalidPosition() public {
         // Try to get liquidation bonus for a non-existent position
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, alice, 0));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, alice, 0));
         LendefiInstance.getPositionLiquidationFee(alice, 0);
 
         // Create a position
@@ -259,7 +259,7 @@ contract getPositionLiquidationFeeTest is BasicDeploy {
         LendefiInstance.getPositionLiquidationFee(alice, 0);
 
         // But should still fail for position 1 which doesn't exist
-        vm.expectRevert(abi.encodeWithSelector(Lendefi.InvalidPosition.selector, alice, 1));
+        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.InvalidPosition.selector, alice, 1));
         LendefiInstance.getPositionLiquidationFee(alice, 1);
     }
 
