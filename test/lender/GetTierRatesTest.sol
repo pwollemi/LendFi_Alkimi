@@ -19,24 +19,24 @@ contract GetTierRatesTest is BasicDeploy {
 
     function test_GetTierRates_InitialRates() public {
         // Call the getTierRates function
-        (uint256[4] memory borrowRates, uint256[4] memory liquidationBonuses) = LendefiInstance.getTierRates();
+        (uint256[4] memory jumpRates, uint256[4] memory liquidationBonuses) = LendefiInstance.getTierRates();
 
         // Verify the initial borrow rates match what's set in the initialize function
-        assertEq(borrowRates[0], 0.15e6, "ISOLATED borrow rate should be 15%");
-        assertEq(borrowRates[1], 0.08e6, "CROSS_A borrow rate should be 8%");
-        assertEq(borrowRates[2], 0.12e6, "CROSS_B borrow rate should be 12%");
-        assertEq(borrowRates[3], 0.05e6, "STABLE borrow rate should be 5%");
+        assertEq(jumpRates[0], 0.15e6, "ISOLATED borrow rate should be 15%");
+        assertEq(jumpRates[1], 0.08e6, "CROSS_A borrow rate should be 8%");
+        assertEq(jumpRates[2], 0.12e6, "CROSS_B borrow rate should be 12%");
+        assertEq(jumpRates[3], 0.05e6, "STABLE borrow rate should be 5%");
 
         // Verify the initial liquidation bonuses match what's set in the initialize function
-        assertEq(liquidationBonuses[0], 0.15e6, "ISOLATED liquidation bonus should be 15%");
-        assertEq(liquidationBonuses[1], 0.08e6, "CROSS_A liquidation bonus should be 8%");
-        assertEq(liquidationBonuses[2], 0.1e6, "CROSS_B liquidation bonus should be 10%");
-        assertEq(liquidationBonuses[3], 0.05e6, "STABLE liquidation bonus should be 5%");
+        assertEq(liquidationBonuses[0], 0.06e6, "ISOLATED liquidation bonus should be 6%");
+        assertEq(liquidationBonuses[1], 0.04e6, "CROSS_A liquidation bonus should be 8%");
+        assertEq(liquidationBonuses[2], 0.05e6, "CROSS_B liquidation bonus should be 10%");
+        assertEq(liquidationBonuses[3], 0.02e6, "STABLE liquidation bonus should be 5%");
     }
 
     function test_GetTierRates_AfterUpdate() public {
         // Get initial rates for comparison
-        (uint256[4] memory initialBorrowRates, uint256[4] memory initialLiquidationBonuses) =
+        (uint256[4] memory initialjumpRates, uint256[4] memory initialLiquidationBonuses) =
             LendefiInstance.getTierRates();
 
         // Update some tier parameters
@@ -59,19 +59,19 @@ contract GetTierRatesTest is BasicDeploy {
         vm.stopPrank();
 
         // Call getTierRates again to get the updated rates
-        (uint256[4] memory newBorrowRates, uint256[4] memory newLiquidationBonuses) = LendefiInstance.getTierRates();
+        (uint256[4] memory newjumpRates, uint256[4] memory newLiquidationBonuses) = LendefiInstance.getTierRates();
 
         // Verify updated rates for ISOLATED tier
-        assertEq(newBorrowRates[0], 0.2e6, "ISOLATED borrow rate should be updated to 20%");
+        assertEq(newjumpRates[0], 0.2e6, "ISOLATED borrow rate should be updated to 20%");
         assertEq(newLiquidationBonuses[0], 0.18e6, "ISOLATED liquidation bonus should be updated to 18%");
 
         // Verify updated rates for STABLE tier
-        assertEq(newBorrowRates[3], 0.06e6, "STABLE borrow rate should be updated to 6%");
+        assertEq(newjumpRates[3], 0.06e6, "STABLE borrow rate should be updated to 6%");
         assertEq(newLiquidationBonuses[3], 0.07e6, "STABLE liquidation bonus should be updated to 7%");
 
         // Verify rates for tiers we didn't update remain the same
-        assertEq(newBorrowRates[1], initialBorrowRates[1], "CROSS_A borrow rate should remain unchanged");
-        assertEq(newBorrowRates[2], initialBorrowRates[2], "CROSS_B borrow rate should remain unchanged");
+        assertEq(newjumpRates[1], initialjumpRates[1], "CROSS_A borrow rate should remain unchanged");
+        assertEq(newjumpRates[2], initialjumpRates[2], "CROSS_B borrow rate should remain unchanged");
         assertEq(
             newLiquidationBonuses[1], initialLiquidationBonuses[1], "CROSS_A liquidation bonus should remain unchanged"
         );
@@ -111,14 +111,14 @@ contract GetTierRatesTest is BasicDeploy {
         vm.stopPrank();
 
         // Get updated rates
-        (uint256[4] memory updatedBorrowRates, uint256[4] memory updatedLiquidationBonuses) =
+        (uint256[4] memory updatedjumpRates, uint256[4] memory updatedLiquidationBonuses) =
             LendefiInstance.getTierRates();
 
         // Verify the mapping of tiers to array indices is correct
-        assertEq(updatedBorrowRates[0], 0.1e6, "ISOLATED should be at index 0");
-        assertEq(updatedBorrowRates[1], 0.12e6, "CROSS_A should be at index 1");
-        assertEq(updatedBorrowRates[2], 0.14e6, "CROSS_B should be at index 2");
-        assertEq(updatedBorrowRates[3], 0.16e6, "STABLE should be at index 3");
+        assertEq(updatedjumpRates[0], 0.1e6, "ISOLATED should be at index 0");
+        assertEq(updatedjumpRates[1], 0.12e6, "CROSS_A should be at index 1");
+        assertEq(updatedjumpRates[2], 0.14e6, "CROSS_B should be at index 2");
+        assertEq(updatedjumpRates[3], 0.16e6, "STABLE should be at index 3");
 
         assertEq(updatedLiquidationBonuses[0], 0.11e6, "ISOLATED liquidation bonus should be at index 0");
         assertEq(updatedLiquidationBonuses[1], 0.13e6, "CROSS_A liquidation bonus should be at index 1");
