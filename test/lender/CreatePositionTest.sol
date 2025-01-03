@@ -25,14 +25,14 @@ contract CreatePositionTest is BasicDeploy {
     address internal notListedAsset;
 
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Deploy mock tokens (USDC already deployed by deployCompleteWithOracle())
         wethInstance = new WETH9();
         rwaToken = new MockRWA("Ondo Finance", "ONDO");
         MockRWA unlisted = new MockRWA("Unlisted Token", "UNLIST");
@@ -46,21 +46,18 @@ contract CreatePositionTest is BasicDeploy {
         wethOracleInstance = new WETHPriceConsumerV3();
         rwaOracleInstance = new RWAPriceConsumerV3();
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Set prices
+        wethOracleInstance.setPrice(2500e8); // $2500 per ETH
+        rwaOracleInstance.setPrice(1000e8); // $1000 per RWA token
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        // Register oracles with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
+
+        oracleInstance.addOracle(address(rwaToken), address(rwaOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(rwaToken), address(rwaOracleInstance));
+        vm.stopPrank();
 
         // Setup roles
         vm.prank(guardian);
@@ -77,28 +74,28 @@ contract CreatePositionTest is BasicDeploy {
         LendefiInstance.updateAssetConfig(
             address(rwaToken),
             address(rwaOracleInstance),
-            8,
-            18,
-            1,
-            650,
-            750,
-            1_000_000 ether,
+            8, // Oracle decimals
+            18, // Asset decimals
+            1, // Active
+            650, // 65% borrow threshold
+            750, // 75% liquidation threshold
+            1_000_000 ether, // Supply limit
             IPROTOCOL.CollateralTier.ISOLATED,
-            100_000e6
+            100_000e6 // Isolation debt cap
         );
 
         // Configure WETH as CROSS_A tier
         LendefiInstance.updateAssetConfig(
             address(wethInstance),
             address(wethOracleInstance),
-            8,
-            18,
-            1,
-            800,
-            850,
-            1_000_000 ether,
+            8, // Oracle decimals
+            18, // Asset decimals
+            1, // Active
+            800, // 80% borrow threshold
+            850, // 85% liquidation threshold
+            1_000_000 ether, // Supply limit
             IPROTOCOL.CollateralTier.CROSS_A,
-            0
+            0 // No isolation debt cap
         );
 
         vm.stopPrank();
