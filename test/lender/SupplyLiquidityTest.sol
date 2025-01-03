@@ -19,14 +19,14 @@ contract SupplyLiquidityTest is BasicDeploy {
     WETHPriceConsumerV3 internal wethOracleInstance;
 
     function setUp() public {
-        deployComplete();
+        // Use the updated deployment function that includes Oracle setup
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
         // Deploy mock tokens
-        usdcInstance = new USDC();
         wethInstance = new WETH9();
         rwaToken = new MockRWA("Ondo Finance", "ONDO");
 
@@ -38,21 +38,14 @@ contract SupplyLiquidityTest is BasicDeploy {
         wethOracleInstance.setPrice(2500e8); // $2500 per ETH
         rwaOracleInstance.setPrice(1000e8); // $1000 per RWA token
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Register oracles with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        oracleInstance.addOracle(address(rwaToken), address(rwaOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(rwaToken), address(rwaOracleInstance));
+        vm.stopPrank();
 
         // Setup roles
         vm.prank(guardian);
