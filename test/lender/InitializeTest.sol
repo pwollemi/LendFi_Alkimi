@@ -59,19 +59,19 @@ contract InitializeTest is BasicDeploy {
         assertEq(LendefiInstance.liquidatorThreshold(), 20_000 ether, "Incorrect liquidatorThreshold");
 
         // Check tier parameters
-        (uint256[4] memory borrowRates, uint256[4] memory liquidationBonuses) = LendefiInstance.getTierRates();
+        (uint256[4] memory jumpRates, uint256[4] memory liquidationBonuses) = LendefiInstance.getTierRates();
 
         // Check borrow rates
-        assertEq(borrowRates[0], 0.15e6, "Incorrect ISOLATED borrow rate");
-        assertEq(borrowRates[1], 0.08e6, "Incorrect CROSS_A borrow rate");
-        assertEq(borrowRates[2], 0.12e6, "Incorrect CROSS_B borrow rate");
-        assertEq(borrowRates[3], 0.05e6, "Incorrect STABLE borrow rate");
+        assertEq(jumpRates[0], 0.15e6, "Incorrect ISOLATED borrow rate");
+        assertEq(jumpRates[1], 0.08e6, "Incorrect CROSS_A borrow rate");
+        assertEq(jumpRates[2], 0.12e6, "Incorrect CROSS_B borrow rate");
+        assertEq(jumpRates[3], 0.05e6, "Incorrect STABLE borrow rate");
 
         // Check liquidation bonuses
-        assertEq(liquidationBonuses[0], 0.15e6, "Incorrect ISOLATED liquidation bonus");
-        assertEq(liquidationBonuses[1], 0.08e6, "Incorrect CROSS_A liquidation bonus");
-        assertEq(liquidationBonuses[2], 0.1e6, "Incorrect CROSS_B liquidation bonus");
-        assertEq(liquidationBonuses[3], 0.05e6, "Incorrect STABLE liquidation bonus");
+        assertEq(liquidationBonuses[0], 0.06e6, "Incorrect ISOLATED liquidation bonus");
+        assertEq(liquidationBonuses[1], 0.04e6, "Incorrect CROSS_A liquidation bonus");
+        assertEq(liquidationBonuses[2], 0.05e6, "Incorrect CROSS_B liquidation bonus");
+        assertEq(liquidationBonuses[3], 0.02e6, "Incorrect STABLE liquidation bonus");
 
         // Check version increment
         assertEq(LendefiInstance.version(), 1, "Version not incremented");
@@ -220,13 +220,13 @@ contract InitializeTest is BasicDeploy {
         assertEq(LendefiInstance.baseBorrowRate(), 60_000, "baseBorrowRate should be 0.06e6 = 60000");
         assertEq(LendefiInstance.baseProfitTarget(), 10_000, "baseProfitTarget should be 0.01e6 = 10000");
         assertEq(
-            LendefiInstance.tierBaseBorrowRate(IPROTOCOL.CollateralTier.ISOLATED),
-            150_000,
+            LendefiInstance.tierBaseJumpRate(IPROTOCOL.CollateralTier.ISOLATED),
+            0.15e6,
             "ISOLATED rate should be 0.15e6 = 150000"
         );
         assertEq(
             LendefiInstance.tierLiquidationBonus(IPROTOCOL.CollateralTier.STABLE),
-            50_000,
+            0.02e6,
             "STABLE bonus should be 0.05e6 = 50000"
         );
     }
@@ -239,7 +239,7 @@ contract InitializeTest is BasicDeploy {
 
         // Check that mappings return default values
         assertEq(
-            uninitializedContract.tierBaseBorrowRate(IPROTOCOL.CollateralTier.ISOLATED),
+            uninitializedContract.tierBaseJumpRate(IPROTOCOL.CollateralTier.ISOLATED),
             0,
             "Mapping should return 0 before initialization"
         );
@@ -271,22 +271,22 @@ contract InitializeTest is BasicDeploy {
         tiers[2] = IPROTOCOL.CollateralTier.CROSS_B;
         tiers[3] = IPROTOCOL.CollateralTier.STABLE;
 
-        uint256[] memory expectedBorrowRates = new uint256[](4);
-        expectedBorrowRates[0] = 0.15e6;
-        expectedBorrowRates[1] = 0.08e6;
-        expectedBorrowRates[2] = 0.12e6;
-        expectedBorrowRates[3] = 0.05e6;
+        uint256[] memory expectedjumpRates = new uint256[](4);
+        expectedjumpRates[0] = 0.15e6;
+        expectedjumpRates[1] = 0.08e6;
+        expectedjumpRates[2] = 0.12e6;
+        expectedjumpRates[3] = 0.05e6;
 
         uint256[] memory expectedLiquidationBonuses = new uint256[](4);
-        expectedLiquidationBonuses[0] = 0.15e6;
-        expectedLiquidationBonuses[1] = 0.08e6;
-        expectedLiquidationBonuses[2] = 0.1e6;
-        expectedLiquidationBonuses[3] = 0.05e6;
+        expectedLiquidationBonuses[0] = 0.06e6;
+        expectedLiquidationBonuses[1] = 0.04e6;
+        expectedLiquidationBonuses[2] = 0.05e6;
+        expectedLiquidationBonuses[3] = 0.02e6;
 
         for (uint256 i = 0; i < tiers.length; i++) {
             assertEq(
-                LendefiInstance.tierBaseBorrowRate(tiers[i]),
-                expectedBorrowRates[i],
+                LendefiInstance.tierBaseJumpRate(tiers[i]),
+                expectedjumpRates[i],
                 string.concat("Incorrect borrow rate for tier ", Strings.toString(uint256(tiers[i])))
             );
 
