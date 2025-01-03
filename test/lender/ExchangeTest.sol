@@ -20,14 +20,14 @@ contract ExchangeTest is BasicDeploy {
     WETHPriceConsumerV3 internal wethOracleInstance;
 
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Deploy mock tokens (USDC already deployed by deployCompleteWithOracle())
         wethInstance = new WETH9();
         rwaToken = new MockRWA("Ondo Finance", "ONDO");
 
@@ -39,21 +39,14 @@ contract ExchangeTest is BasicDeploy {
         wethOracleInstance.setPrice(2500e8); // $2500 per ETH
         rwaOracleInstance.setPrice(1000e8); // $1000 per RWA token
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Register oracles with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        oracleInstance.addOracle(address(rwaToken), address(rwaOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(rwaToken), address(rwaOracleInstance));
+        vm.stopPrank();
 
         // Setup roles
         vm.prank(guardian);
@@ -69,34 +62,34 @@ contract ExchangeTest is BasicDeploy {
         LendefiInstance.updateAssetConfig(
             address(wethInstance),
             address(wethOracleInstance),
-            8,
-            18,
-            1,
+            8, // Oracle decimals
+            18, // Asset decimals
+            1, // Active
             800, // 80% borrow threshold
             850, // 85% liquidation threshold
-            1_000_000 ether,
+            1_000_000 ether, // Supply limit
             IPROTOCOL.CollateralTier.CROSS_A,
-            0
+            0 // No isolation debt cap
         );
 
         // Configure RWA token as ISOLATED tier
         LendefiInstance.updateAssetConfig(
             address(rwaToken),
             address(rwaOracleInstance),
-            8,
-            18,
-            1,
+            8, // Oracle decimals
+            18, // Asset decimals
+            1, // Active
             650, // 65% borrow threshold
             750, // 75% liquidation threshold
-            1_000_000 ether,
+            1_000_000 ether, // Supply limit
             IPROTOCOL.CollateralTier.ISOLATED,
             100_000e6 // Isolation debt cap of 100,000 USDC
         );
 
         vm.stopPrank();
     }
-
     // Helper function to supply liquidity
+
     function _supplyLiquidity(address user, uint256 amount) internal {
         usdcInstance.mint(user, amount);
         vm.startPrank(user);
