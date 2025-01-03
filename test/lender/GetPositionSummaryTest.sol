@@ -433,11 +433,11 @@ contract GetPositionSummaryTest is BasicDeploy {
 
         // Borrow close to maximum
         uint256 creditLimit = (collateralAmount * 2500e8 * 800 * 1e6) / 1e18 / 1000 / 1e8; // ~$10,000
-        uint256 borrowAmount = creditLimit * 90 / 100; // 90% of credit limit
-        _borrowUSDC(alice, positionId, borrowAmount);
+
+        _borrowUSDC(alice, positionId, creditLimit);
 
         // Crash ETH price to trigger liquidation
-        wethOracleInstance.setPrice(int256(1000e8)); // $1000 per ETH (60% drop)
+        wethOracleInstance.setPrice(int256(2500e8 * 84 / 100)); // Liquidation threshold is 85%
 
         // Setup liquidator
         uint256 liquidatorThreshold = LendefiInstance.liquidatorThreshold();
@@ -446,13 +446,12 @@ contract GetPositionSummaryTest is BasicDeploy {
 
         // Calculate liquidation cost
         uint256 debtWithInterest = LendefiInstance.calculateDebtWithInterest(alice, positionId);
-        uint256 liquidationBonus = LendefiInstance.getPositionLiquidationFee(alice, positionId);
-        uint256 totalCost = debtWithInterest + ((debtWithInterest * liquidationBonus) / 1e6);
+        // uint256 liquidationBonus = LendefiInstance.getPositionLiquidationFee(alice, positionId);
 
         // Liquidate the position
-        usdcInstance.mint(bob, totalCost * 2); // Extra buffer
+        usdcInstance.mint(bob, debtWithInterest * 2); // Extra buffer
         vm.startPrank(bob);
-        usdcInstance.approve(address(LendefiInstance), totalCost * 2);
+        usdcInstance.approve(address(LendefiInstance), debtWithInterest * 2);
         LendefiInstance.liquidate(alice, positionId);
         vm.stopPrank();
 
