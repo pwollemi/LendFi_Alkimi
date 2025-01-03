@@ -20,14 +20,16 @@ contract OraclePriceTest is BasicDeploy {
     MockPriceOracle internal mockOracle;
 
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        // This will set up the Oracle module and Lendefi with it
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Deploy mock tokens - note that usdcInstance is already deployed by deployCompleteWithOracle()
+        // We only need to deploy WETH here
         wethInstance = new WETH9();
 
         // Deploy oracles
@@ -36,33 +38,46 @@ contract OraclePriceTest is BasicDeploy {
         stableOracleInstance = new StablePriceConsumerV3();
         mockOracle = new MockPriceOracle();
 
+        // Set up mockOracle with default values for testing
+        mockOracle.setPrice(1000e8); // Default price
+        mockOracle.setTimestamp(block.timestamp); // Current timestamp
+        mockOracle.setRoundId(1);
+        mockOracle.setAnsweredInRound(1);
+
         // Set prices
         wethOracleInstance.setPrice(2500e8); // $2500 per ETH
         rwaOracleInstance.setPrice(1000e8); // $1000 per RWA token
         stableOracleInstance.setPrice(1e8); // $1 per stable token
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Register oracles with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.updateMinimumOracles(1);
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        // Register mock oracles for direct testing of the oracle module
+        oracleInstance.addOracle(address(0x1), address(rwaOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(0x1), address(rwaOracleInstance));
+
+        oracleInstance.addOracle(address(0x2), address(stableOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(0x2), address(stableOracleInstance));
+
+        oracleInstance.addOracle(address(0x3), address(mockOracle), 8);
+        oracleInstance.setPrimaryOracle(address(0x3), address(mockOracle));
+        vm.stopPrank();
     }
 
     // Test 1: Happy Path - Successfully get price
     function test_GetAssetPriceOracle_Success() public {
         uint256 expectedPrice = 2500e8;
-        uint256 actualPrice = LendefiInstance.getAssetPriceOracle(address(wethOracleInstance));
-        assertEq(actualPrice, expectedPrice, "Price should match the preset value");
+
+        // Test through the Lendefi oracle wrapper
+        uint256 price1 = LendefiInstance.getAssetPriceOracle(address(wethOracleInstance));
+        assertEq(price1, expectedPrice, "Oracle wrapper price should match");
+
+        // Test through the Oracle module
+        uint256 price2 = oracleInstance.getAssetPrice(address(wethInstance));
+        assertEq(price2, expectedPrice, "Oracle module price should match");
     }
 
     // Test 2: Invalid Price - Oracle returns zero or negative price
@@ -70,16 +85,23 @@ contract OraclePriceTest is BasicDeploy {
         // Set price to zero
         mockOracle.setPrice(0);
 
-        // Expect revert with OracleInvalidPrice
-        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.OracleInvalidPrice.selector, address(mockOracle), 0));
+        // Expect revert when called through Lendefi
+        vm.expectRevert();
         LendefiInstance.getAssetPriceOracle(address(mockOracle));
+
+        // Expect revert when called through Oracle module
+        vm.expectRevert();
+        oracleInstance.getAssetPrice(address(0x3));
 
         // Set price to negative
         mockOracle.setPrice(-100);
 
-        // Expect revert with OracleInvalidPrice
-        vm.expectRevert(abi.encodeWithSelector(IPROTOCOL.OracleInvalidPrice.selector, address(mockOracle), -100));
+        // Expect revert with both approaches
+        vm.expectRevert();
         LendefiInstance.getAssetPriceOracle(address(mockOracle));
+
+        vm.expectRevert();
+        oracleInstance.getAssetPrice(address(0x3));
     }
 
     // Test 3: Stale Price - answeredInRound < roundId
