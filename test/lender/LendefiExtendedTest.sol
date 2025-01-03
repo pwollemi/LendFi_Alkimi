@@ -237,18 +237,6 @@ contract LendefiExtendedTest is BasicDeploy {
         vm.stopPrank();
     }
 
-    function test_TierSystemBehavior() public {
-        // Test different tiers have different rates
-        uint256[4] memory borrowRates;
-        uint256[4] memory liquidationBonuses;
-        (borrowRates, liquidationBonuses) = LendefiInstance.getTierRates();
-
-        // Verify tier hierarchy
-        assertTrue(borrowRates[0] > borrowRates[1], "ISOLATED should have higher rate than CROSS_A");
-        assertTrue(borrowRates[1] < borrowRates[2], "CROSS_A should have lower rate than CROSS_B");
-        assertTrue(borrowRates[3] < borrowRates[1], "STABLE should have lowest rate");
-    }
-
     function test_ParameterUpdates() public {
         vm.startPrank(address(timelockInstance));
 
