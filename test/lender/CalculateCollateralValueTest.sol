@@ -23,14 +23,14 @@ contract CalculateCollateralValueTest is BasicDeploy {
     uint256 constant STABLE_PRICE = 1e8; // $1 per stable token
 
     function setUp() public {
-        deployComplete();
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Deploy mock tokens (USDC already deployed by deployCompleteWithOracle())
+        // DO NOT redeploy USDC - it causes issues
         wethInstance = new WETH9();
         rwaToken = new MockRWA("Real World Asset", "RWA");
         stableToken = new MockRWA("Stable Token", "STABLE");
@@ -56,21 +56,20 @@ contract CalculateCollateralValueTest is BasicDeploy {
         stableOracle.setRoundId(1);
         stableOracle.setAnsweredInRound(1);
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Register oracles with Oracle module - use guardian for registration
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(ethOracle), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(ethOracle));
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        oracleInstance.addOracle(address(rwaToken), address(rwaOracle), 8);
+        oracleInstance.setPrimaryOracle(address(rwaToken), address(rwaOracle));
+
+        oracleInstance.addOracle(address(stableToken), address(stableOracle), 8);
+        oracleInstance.setPrimaryOracle(address(stableToken), address(stableOracle));
+
+        // Set minimum required oracles to 1 to avoid NotEnoughOracles errors
+        oracleInstance.updateMinimumOracles(1);
+        vm.stopPrank();
 
         _setupAssets();
         _supplyProtocolLiquidity();
@@ -125,6 +124,7 @@ contract CalculateCollateralValueTest is BasicDeploy {
     }
 
     function _supplyProtocolLiquidity() internal {
+        // Use the USDC instance that was deployed by deployCompleteWithOracle()
         // Mint USDC to alice
         usdcInstance.mint(alice, INITIAL_LIQUIDITY);
 
