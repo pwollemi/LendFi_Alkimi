@@ -14,14 +14,14 @@ contract GetUserPositionsCountTest is BasicDeploy {
     MockRWA internal rwaToken;
 
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Deploy mock tokens (USDC already deployed by deployCompleteWithOracle())
         wethInstance = new WETH9();
         rwaToken = new MockRWA("Real World Asset", "RWA");
 
@@ -40,21 +40,18 @@ contract GetUserPositionsCountTest is BasicDeploy {
         rwaOracle.setRoundId(1);
         rwaOracle.setAnsweredInRound(1);
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Register oracles with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(ethOracle), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(ethOracle));
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        oracleInstance.addOracle(address(rwaToken), address(rwaOracle), 8);
+        oracleInstance.setPrimaryOracle(address(rwaToken), address(rwaOracle));
+        vm.stopPrank();
+
+        // Setup roles
+        vm.prank(guardian);
+        ecoInstance.grantRole(REWARDER_ROLE, address(LendefiInstance));
 
         _setupAssets();
         _setupLiquidity();
