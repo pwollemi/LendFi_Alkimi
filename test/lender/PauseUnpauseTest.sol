@@ -27,14 +27,14 @@ contract PauseUnpauseTest is BasicDeploy {
     uint256 internal borrowAmount = 1000e6; // 1000 USDC
 
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Deploy mock tokens (USDC already deployed by deployCompleteWithOracle)
         wethInstance = new WETH9();
         rwaToken = new MockRWA("Ondo Finance", "ONDO");
 
@@ -46,30 +46,19 @@ contract PauseUnpauseTest is BasicDeploy {
         wethOracleInstance.setPrice(2500e8); // $2500 per ETH
         rwaOracleInstance.setPrice(1000e8); // $1000 per RWA token
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
-
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
-
         // Setup roles
         vm.prank(guardian);
         ecoInstance.grantRole(REWARDER_ROLE, address(LendefiInstance));
+        // Register oracles with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
+        oracleInstance.addOracle(address(rwaToken), address(rwaOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(rwaToken), address(rwaOracleInstance));
 
         // Set up flash loan fee
-        vm.prank(address(timelockInstance));
         LendefiInstance.updateFlashLoanFee(9); // 9 basis points = 0.09%
-
+        vm.stopPrank();
         // Deploy flash loan receiver
         flashLoanReceiver = new MockFlashLoanReceiver();
 
