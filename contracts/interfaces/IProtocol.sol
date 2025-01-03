@@ -305,10 +305,26 @@ interface IPROTOCOL is IERC20 {
     );
 
     /**
+     * @notice Emitted when collateral is transferred between positions
+     * @param user Address of the position owner
+     * @param fromPositionId Source position ID
+     * @param toPositionId Target position ID
+     * @param asset Address of the transferred asset
+     * @param amount Amount of the asset transferred
+     */
+    event InterPositionalTransfer(
+        address indexed user,
+        uint256 indexed fromPositionId,
+        uint256 indexed toPositionId,
+        address asset,
+        uint256 amount
+    );
+    /**
      * @notice Thrown when a position ID is invalid for a user
      * @param user The address of the position owner
      * @param positionId The invalid position ID
      */
+
     error InvalidPosition(address user, uint256 positionId);
     /**
      * @notice Thrown when a liquidator has insufficient governance tokens
@@ -500,10 +516,9 @@ interface IPROTOCOL is IERC20 {
     /// @param user The position owner
     /// @param positionId The position ID
     error TooManyAssets(address user, uint256 positionId);
-    /// @notice Thrown when trying to set a rate below minimum allowed
+    /// @notice Thrown when trying to set a reward above maximum allowed
     /// @param requested The requested rate
-    /// @param minimum The minimum allowed rate
-    error RateTooLow(uint256 requested, uint256 minimum);
+    /// @param max The maximum allowed rate
     error RewardTooHigh(uint256 requested, uint256 max);
     /// @notice Thrown when trying to set a reward interval below minimum allowed
     /// @param requested The requested interval in seconds
@@ -521,7 +536,10 @@ interface IPROTOCOL is IERC20 {
     /// @param requested The requested rate
     /// @param maximum The maximum allowed rate
     error RateTooHigh(uint256 requested, uint256 maximum);
-
+    /// @notice Thrown when trying to set a rate below minimum allowed
+    /// @param requested The requested rate
+    /// @param minimum The minimum allowed rate
+    error RateTooLow(uint256 requested, uint256 minimum);
     /**
      * @notice Thrown when attempting to interact with an inactive position
      * @param user The address of the position owner
@@ -545,6 +563,11 @@ interface IPROTOCOL is IERC20 {
      */
     error CircuitBreakerTriggered(address asset, uint256 currentPrice, uint256 previousPrice, uint256 changePercent);
 
+    /**
+     * @notice Error thrown when an operation is not allowed in isolation mode
+     * @dev Used for operations restricted to cross-collateral positions
+     */
+    error IsolationModeForbidden();
     //////////////////////////////////////////////////
     // ---------------Core functions---------------//
     /////////////////////////////////////////////////
