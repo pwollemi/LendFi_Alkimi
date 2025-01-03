@@ -23,14 +23,15 @@ contract HealthFactorTest is BasicDeploy {
     uint256 constant STABLE_PRICE = 1e8; // $1 per stable token
 
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
         // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Note: usdcInstance is already deployed by deployCompleteWithOracle()
         wethInstance = new WETH9();
         rwaToken = new MockRWA("Real World Asset", "RWA");
         stableToken = new MockRWA("Stable Token", "STABLE");
@@ -56,21 +57,20 @@ contract HealthFactorTest is BasicDeploy {
         stableOracle.setRoundId(1);
         stableOracle.setAnsweredInRound(1);
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Register oracles with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(ethOracle), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(ethOracle));
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        oracleInstance.addOracle(address(rwaToken), address(rwaOracle), 8);
+        oracleInstance.setPrimaryOracle(address(rwaToken), address(rwaOracle));
+
+        oracleInstance.addOracle(address(stableToken), address(stableOracle), 8);
+        oracleInstance.setPrimaryOracle(address(stableToken), address(stableOracle));
+        vm.stopPrank();
+
+        // No need to deploy Lendefi manually as it's already deployed by deployCompleteWithOracle()
+        // with the Oracle module integration
 
         _setupAssets();
         _supplyProtocolLiquidity();
