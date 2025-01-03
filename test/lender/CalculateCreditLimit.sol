@@ -19,14 +19,14 @@ contract CalculateCreditLimitTest is BasicDeploy {
     StablePriceConsumerV3 internal stableOracleInstance;
 
     function setUp() public {
-        deployComplete();
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Deploy mock tokens (USDC already deployed by deployCompleteWithOracle())
+        // REMOVE: usdcInstance = new USDC(); - This was causing the error
         wethInstance = new WETH9();
         rwaToken = new MockRWA("Ondo Finance", "ONDO");
         stableToken = new MockRWA("USD Coin", "USDC");
@@ -41,21 +41,19 @@ contract CalculateCreditLimitTest is BasicDeploy {
         rwaOracleInstance.setPrice(1000e8); // $1000 per RWA token
         stableOracleInstance.setPrice(1e8); // $1 per stable token
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Register oracles with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        oracleInstance.addOracle(address(rwaToken), address(rwaOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(rwaToken), address(rwaOracleInstance));
+
+        oracleInstance.addOracle(address(stableToken), address(stableOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(stableToken), address(stableOracleInstance));
+
+        oracleInstance.updateMinimumOracles(1); // Set minimum oracles to 1 to avoid NotEnoughOracles error
+        vm.stopPrank();
 
         // Setup roles
         vm.prank(guardian);
