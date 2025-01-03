@@ -40,30 +40,12 @@ contract UpdateProtocolParametersTest is BasicDeploy {
     uint256 constant MIN_LIQUIDATOR_THRESHOLD = 10 ether;
 
     function setUp() public {
-        deployComplete();
+        // Use the updated deployment function that includes Oracle setup
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
-
-        // Deploy USDC
-        usdcInstance = new USDC();
-
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
-
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
     }
 
     /* --------------- updateBaseProfitTarget Tests --------------- */
