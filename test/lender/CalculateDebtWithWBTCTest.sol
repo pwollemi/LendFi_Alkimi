@@ -20,15 +20,16 @@ contract WBTCInterestTest is BasicDeploy {
     StablePriceConsumerV3 internal stableOracleInstance;
 
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
         vm.warp(block.timestamp + 90 days);
 
-        // Deploy tokens
-        usdcInstance = new USDC();
+        // Deploy tokens (USDC already deployed by deployCompleteWithOracle())
+        // Don't redeploy USDC - use the one from deployCompleteWithOracle()
         wethInstance = new WETH9();
         wbtcIsolatedToken = new MockWBTC();
         wbtcCrossToken = new MockWBTC();
@@ -43,21 +44,20 @@ contract WBTCInterestTest is BasicDeploy {
         wbtcOracleInstance.setPrice(60000e8); // $60,000 per BTC
         stableOracleInstance.setPrice(1e8); // $1 per stable
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Register oracles with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        oracleInstance.addOracle(address(wbtcIsolatedToken), address(wbtcOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wbtcIsolatedToken), address(wbtcOracleInstance));
+
+        oracleInstance.addOracle(address(wbtcCrossToken), address(wbtcOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wbtcCrossToken), address(wbtcOracleInstance));
+
+        oracleInstance.addOracle(address(usdcInstance), address(stableOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(usdcInstance), address(stableOracleInstance));
+        vm.stopPrank();
 
         // Setup roles
         vm.prank(guardian);
