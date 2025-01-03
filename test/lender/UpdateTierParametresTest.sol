@@ -23,36 +23,41 @@ contract UpdateTierParametersTest is BasicDeploy {
     uint256 constant MAX_LIQUIDATION_BONUS = 0.2e6; // 20%
 
     function setUp() public {
-        // In your setUp() function, add:
+        // Create the mock WETH oracle first
         wethOracleInstance = new WETHPriceConsumerV3();
         wethOracleInstance.setPrice(2500e8); // $2500 per ETH
-        deployComplete();
+
+        // Deploy all contracts including the Oracle module
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy USDC
-        usdcInstance = new USDC();
+        // Deploy WETH (already have usdcInstance from deployCompleteWithOracle)
+        wethInstance = new WETH9();
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
+        // Register the WETH oracle with the Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
+
+        LendefiInstance.updateAssetConfig(
+            address(wethInstance),
+            address(wethOracleInstance),
+            8, // oracle decimals
+            18, // asset decimals
+            1, // active
+            800, // 80% borrow threshold
+            850, // 85% liquidation threshold
+            1_000_000 ether, // max supply
+            IPROTOCOL.CollateralTier.CROSS_A,
+            0 // no isolation debt cap
         );
-
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        vm.stopPrank();
     }
-
     // Test 1: Only manager can update tier parameters
+
     function test_OnlyManagerCanUpdateTierParameters() public {
         // Regular user should not be able to update tier parameters
         vm.startPrank(alice);
