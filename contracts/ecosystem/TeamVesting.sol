@@ -30,12 +30,6 @@ contract TeamVesting is ITEAMVESTING, Context, Ownable2Step, ReentrancyGuard {
     uint256 private _tokensReleased;
 
     /**
-     * @dev Custom errors
-     */
-    error Unauthorized();
-    error ZeroAddress();
-
-    /**
      * @dev Contract initialization event
      */
     event VestingInitialized(
@@ -45,6 +39,12 @@ contract TeamVesting is ITEAMVESTING, Context, Ownable2Step, ReentrancyGuard {
         uint64 startTimestamp,
         uint64 duration
     );
+    /**
+     * @dev Custom errors
+     */
+
+    error Unauthorized();
+    error ZeroAddress();
 
     /**
      * @dev Throws if called by any account other than the timelock.
