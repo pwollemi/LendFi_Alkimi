@@ -15,14 +15,14 @@ contract PositionStatusTest is BasicDeploy {
     uint256 constant INITIAL_LIQUIDITY = 1_000_000e6; // 1M USDC
 
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Deploy WETH (USDC already deployed by deployCompleteWithOracle())
         wethInstance = new WETH9();
 
         // Deploy price oracle with proper implementation
@@ -32,27 +32,14 @@ contract PositionStatusTest is BasicDeploy {
         wethOracle.setRoundId(1);
         wethOracle.setAnsweredInRound(1);
 
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
-
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
-
         // Setup roles
         vm.prank(guardian);
         ecoInstance.grantRole(REWARDER_ROLE, address(LendefiInstance));
-
-        // Configure WETH as an asset
+        // Register the oracle with the Oracle module
         vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracle), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracle));
+        // Update asset config for WETH
         LendefiInstance.updateAssetConfig(
             address(wethInstance),
             address(wethOracle),
