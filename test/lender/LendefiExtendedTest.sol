@@ -17,15 +17,16 @@ contract LendefiExtendedTest is BasicDeploy {
     WETHPriceConsumerV3 internal wethOracleInstance;
 
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
         assertEq(tokenInstance.totalSupply(), 0);
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Note: usdcInstance is already deployed in deployCompleteWithOracle()
+        // We only need to deploy WETH and RWA tokens
         wethInstance = new WETH9();
         rwaToken = new MockRWA("Ondo Finance", "ONDO");
 
@@ -33,21 +34,18 @@ contract LendefiExtendedTest is BasicDeploy {
         wethOracleInstance = new WETHPriceConsumerV3();
         rwaOracleInstance = new RWAPriceConsumerV3();
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Set prices
+        wethOracleInstance.setPrice(2500e8); // $2500 per ETH
+        rwaOracleInstance.setPrice(1000e8); // $1000 per RWA token
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        // Register oracles with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
+
+        oracleInstance.addOracle(address(rwaToken), address(rwaOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(rwaToken), address(rwaOracleInstance));
+        vm.stopPrank();
 
         // Setup roles
         vm.prank(guardian);
