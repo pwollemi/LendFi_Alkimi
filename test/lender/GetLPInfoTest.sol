@@ -28,36 +28,26 @@ contract GetLPInfoTest is BasicDeploy {
     }
 
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
         vm.warp(block.timestamp + 90 days);
 
-        // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Deploy WETH (USDC already deployed by deployCompleteWithOracle())
         wethInstance = new WETH9();
 
         // Deploy price oracle for WETH
         wethOracleInstance = new WETHPriceConsumerV3();
         wethOracleInstance.setPrice(int256(2500e8)); // $2500 per ETH
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
-
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        // Register oracle with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
+        vm.stopPrank();
 
         // Setup roles
         vm.prank(guardian);
