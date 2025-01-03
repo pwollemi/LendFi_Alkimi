@@ -225,9 +225,9 @@ interface IPROTOCOL is IERC20 {
      * @notice Emitted when tier parameters are updated
      * @param tier Collateral tier being updated
      * @param borrowRate New borrow rate for the tier
-     * @param liquidationBonus New liquidation bonus for the tier
+     * @param liquidationFee New liquidation bonus for the tier
      */
-    event TierParametersUpdated(CollateralTier tier, uint256 borrowRate, uint256 liquidationBonus);
+    event TierParametersUpdated(CollateralTier tier, uint256 borrowRate, uint256 liquidationFee);
 
     /**
      * @notice Emitted when an asset's tier classification is updated
@@ -521,10 +521,7 @@ interface IPROTOCOL is IERC20 {
     /// @param requested The requested rate
     /// @param maximum The maximum allowed rate
     error RateTooHigh(uint256 requested, uint256 maximum);
-    /// @notice Thrown when trying to set a bonus above maximum allowed
-    /// @param requested The requested bonus
-    /// @param maximum The maximum allowed bonus
-    error BonusTooHigh(uint256 requested, uint256 maximum);
+
     /**
      * @notice Thrown when attempting to interact with an inactive position
      * @param user The address of the position owner
@@ -547,13 +544,6 @@ interface IPROTOCOL is IERC20 {
      * @param changePercent The percentage change that triggered the breaker
      */
     error CircuitBreakerTriggered(address asset, uint256 currentPrice, uint256 previousPrice, uint256 changePercent);
-
-    /**
-     * @notice Throws when liquidation value is less than liquidation bonus
-     * @param value Liquidation value
-     * @param bonusAmount Liquidator bonus value
-     */
-    error InsufficientLiquidationValue(uint256 value, uint256 bonusAmount);
 
     //////////////////////////////////////////////////
     // ---------------Core functions---------------//
@@ -657,10 +647,10 @@ interface IPROTOCOL is IERC20 {
      * @notice Updates the borrowing rate and liquidation bonus parameters for a collateral tier
      * @param tier The collateral tier to update
      * @param borrowRate The new borrow rate multiplier (scaled by RAY)
-     * @param liquidationBonus The new liquidation bonus percentage (scaled by 1000)
+     * @param liquidationFee The new liquidation bonus percentage (scaled by 1000)
      * @dev Can only be called by authorized governance roles
      */
-    function updateTierParameters(CollateralTier tier, uint256 borrowRate, uint256 liquidationBonus) external;
+    function updateTierParameters(CollateralTier tier, uint256 borrowRate, uint256 liquidationFee) external;
 
     /**
      * @notice Updates the risk classification tier of an asset
@@ -856,7 +846,7 @@ interface IPROTOCOL is IERC20 {
      * @return totalSupplied The total amount supplied as collateral
      * @return maxSupply The maximum supply threshold
      * @return borrowRate The current borrow interest rate
-     * @return liquidationBonus The liquidation bonus percentage
+     * @return liquidationFee The liquidation bonus percentage
      * @return tier The collateral tier classification
      */
     function getAssetDetails(address asset)
@@ -867,7 +857,7 @@ interface IPROTOCOL is IERC20 {
             uint256 totalSupplied,
             uint256 maxSupply,
             uint256 borrowRate,
-            uint256 liquidationBonus,
+            uint256 liquidationFee,
             CollateralTier tier
         );
 
@@ -969,12 +959,9 @@ interface IPROTOCOL is IERC20 {
     /**
      * @notice Gets all configured rates for each collateral tier
      * @return borrowRates Array of borrow rates for each tier (scaled by RAY)
-     * @return liquidationBonuses Array of liquidation bonuses for each tier (scaled by 1000)
+     * @return liquidationFeees Array of liquidation bonuses for each tier (scaled by 1000)
      */
-    function getTierRates()
-        external
-        view
-        returns (uint256[4] memory borrowRates, uint256[4] memory liquidationBonuses);
+    function getTierRates() external view returns (uint256[4] memory borrowRates, uint256[4] memory liquidationFeees);
 
     /**
      * @notice Gets all assets listed in the protocol
@@ -1079,20 +1066,6 @@ interface IPROTOCOL is IERC20 {
      * @return The total value locked (TVL) amount
      */
     function assetTVL(address asset) external view returns (uint256);
-
-    /**
-     * @notice Gets the base borrow rate for a specific collateral tier
-     * @param tier The collateral tier to query
-     * @return The tier's base borrow rate (scaled by RAY)
-     */
-    function tierBaseJumpRate(CollateralTier tier) external view returns (uint256);
-
-    /**
-     * @notice Gets the liquidation bonus percentage for a specific collateral tier
-     * @param tier The collateral tier to query
-     * @return The tier's liquidation bonus (scaled by 1000)
-     */
-    function tierLiquidationBonus(CollateralTier tier) external view returns (uint256);
 
     /**
      * @notice Adds an additional oracle data source for an asset
