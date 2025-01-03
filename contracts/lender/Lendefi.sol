@@ -188,7 +188,7 @@ contract Lendefi is
 
     /// @notice Base borrow rate for each collateral risk tier
     /// @dev Higher tiers have higher interest rates due to increased risk
-    mapping(CollateralTier => uint256) public tierBaseBorrowRate;
+    mapping(CollateralTier => uint256) public tierBaseJumpRate;
 
     /// @notice Liquidation bonus percentage for each collateral tier
     /// @dev Higher risk tiers have larger liquidation bonuses
@@ -305,15 +305,15 @@ contract Lendefi is
         liquidatorThreshold = 20_000 ether;
 
         // Initialize tier parameters
-        tierBaseBorrowRate[CollateralTier.ISOLATED] = 0.15e6; // 15%
-        tierBaseBorrowRate[CollateralTier.CROSS_A] = 0.08e6; // 8%
-        tierBaseBorrowRate[CollateralTier.CROSS_B] = 0.12e6; // 12%
-        tierBaseBorrowRate[CollateralTier.STABLE] = 0.05e6; // 5%
+        tierBaseJumpRate[CollateralTier.ISOLATED] = 0.15e6; // 15%
+        tierBaseJumpRate[CollateralTier.CROSS_A] = 0.08e6; // 8%
+        tierBaseJumpRate[CollateralTier.CROSS_B] = 0.12e6; // 12%
+        tierBaseJumpRate[CollateralTier.STABLE] = 0.05e6; // 5%
 
-        tierLiquidationBonus[CollateralTier.ISOLATED] = 0.15e6; // 15%
-        tierLiquidationBonus[CollateralTier.CROSS_A] = 0.08e6; // 8%
-        tierLiquidationBonus[CollateralTier.CROSS_B] = 0.1e6; // 10%
-        tierLiquidationBonus[CollateralTier.STABLE] = 0.05e6; // 5%
+        tierLiquidationBonus[CollateralTier.ISOLATED] = 0.06e6; // 15%
+        tierLiquidationBonus[CollateralTier.CROSS_A] = 0.04e6; // 8%
+        tierLiquidationBonus[CollateralTier.CROSS_B] = 0.05e6; // 10%
+        tierLiquidationBonus[CollateralTier.STABLE] = 0.02e6; // 5%
 
         ++version;
         emit Initialized(msg.sender);
@@ -877,22 +877,9 @@ contract Lendefi is
      *      5. Transfers required USDC from liquidator
      *      6. Transfers all position collateral to liquidator
      * @custom:security Non-reentrant and pausable to prevent attack vectors
-     * @custom:validation Checks:
-     *      - Position exists (via validPosition modifier)
-     *      - Liquidator has sufficient governance tokens
-     *      - Position is actually liquidatable
-     *      - Liquidator has sufficient USDC to cover debt + bonus
-     * @custom:rewards Liquidator receives:
-     *      - All collateral in the position
-     *      - Liquidation bonus (varies by tier)
-     * @custom:events Emits:
-     *      - Liquidated event with user, position ID, and debt amount
-     *      - WithdrawCollateral events for each collateral asset transferred
-     * @custom:state Updates:
-     *      - Clears position debt
-     *      - Updates total protocol borrow amount
-     *      - Updates total accrued interest
-     *      - Transfers all collateral to liquidator
+     * @custom:validation Added checks:
+     *      - Liquidator has sufficient USDC balance
+     *      - Health factor is below liquidation threshold
      */
     function liquidate(address user, uint256 positionId)
         external
@@ -906,8 +893,9 @@ contract Lendefi is
             revert InsufficientGovTokens(msg.sender, liquidatorThreshold, govTokenBalance);
         }
 
-        // Check if position is actually liquidatable
-        if (!isLiquidatable(user, positionId)) {
+        // Check if position is actually liquidatable using health factor approach
+        uint256 healthFactorValue = healthFactor(user, positionId);
+        if (healthFactorValue >= WAD) {
             revert NotLiquidatable(user, positionId);
         }
 
@@ -915,20 +903,20 @@ contract Lendefi is
         UserPosition storage position = positions[user][positionId];
         uint256 debtWithInterest = calculateDebtWithInterest(user, positionId);
 
+        // Calculate and track accrued interest
         uint256 interestAccrued = debtWithInterest - position.debtAmount;
         if (interestAccrued > 0) {
             totalAccruedBorrowerInterest += interestAccrued;
         }
 
+        // Get liquidation bonus based on position type
         uint256 liquidationBonus;
-
         if (position.isIsolated) {
             EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[user][positionId];
             if (posAssets.length() > 0) {
                 Asset memory asset = assetInfo[posAssets.at(0)];
                 liquidationBonus = tierLiquidationBonus[asset.tier];
             } else {
-                // Fallback to ISOLATED tier if no assets found (shouldn't happen)
                 liquidationBonus = tierLiquidationBonus[CollateralTier.ISOLATED];
             }
         } else {
@@ -936,8 +924,18 @@ contract Lendefi is
             liquidationBonus = tierLiquidationBonus[tier];
         }
 
+        // Calculate total collateral value for logging
+        uint256 collateralValue = calculateCollateralValue(user, positionId);
+        uint256 excessCollateralValue = collateralValue - debtWithInterest;
+        uint256 bonusAmount = (debtWithInterest * liquidationBonus / WAD);
         // Calculate total debt including liquidation bonus
-        uint256 totalDebt = debtWithInterest + (debtWithInterest * liquidationBonus / WAD);
+        uint256 totalDebt = debtWithInterest + excessCollateralValue - bonusAmount;
+
+        // Check that liquidator has sufficient USDC balance
+        uint256 liquidatorBalance = usdcInstance.balanceOf(msg.sender);
+        if (liquidatorBalance < totalDebt) {
+            revert InsufficientTokenBalance(address(usdcInstance), msg.sender, liquidatorBalance);
+        }
 
         // Update position state
         position.isIsolated = false;
@@ -946,14 +944,21 @@ contract Lendefi is
         position.status = PositionStatus.LIQUIDATED;
         totalBorrow -= debtWithInterest;
 
-        emit Liquidated(user, positionId, debtWithInterest);
+        // Ensure there's enough excess value to cover the bonus
+        if (excessCollateralValue <= bonusAmount) {
+            revert InsufficientLiquidationValue(excessCollateralValue, bonusAmount);
+        }
+
+        // Log liquidation details with more information
+        emit Liquidated(user, positionId, msg.sender);
+        emit LiquidationMetrics(user, positionId, debtWithInterest, bonusAmount, collateralValue, healthFactorValue);
 
         // Transfer debt + bonus from liquidator
         TH.safeTransferFrom(usdcInstance, msg.sender, address(this), totalDebt);
-
         // Transfer all collateral to liquidator
         _transferCollateralToLiquidator(user, positionId, msg.sender);
     }
+
     /**
      * @notice Updates the base profit target rate for the protocol
      * @param rate The new base profit target rate in parts per million (e.g., 0.0025e6 = 0.25%)
@@ -964,7 +969,6 @@ contract Lendefi is
      * @custom:events Emits:
      *      - UpdateBaseProfitTarget with new rate value
      */
-
     function updateBaseProfitTarget(uint256 rate) external onlyRole(MANAGER_ROLE) {
         if (rate < 0.0025e6) {
             revert RateTooLow(rate, 0.0025e6);
@@ -1087,7 +1091,7 @@ contract Lendefi is
             revert BonusTooHigh(liquidationBonus, 0.2e6);
         }
 
-        tierBaseBorrowRate[tier] = borrowRate;
+        tierBaseJumpRate[tier] = borrowRate;
         tierLiquidationBonus[tier] = liquidationBonus;
 
         emit TierParametersUpdated(tier, borrowRate, liquidationBonus);
@@ -1104,7 +1108,7 @@ contract Lendefi is
      * @custom:events Emits:
      *      - AssetTierUpdated with asset address and new tier
      * @custom:impact Changes:
-     *      - Asset's borrow rate via tierBaseBorrowRate
+     *      - Asset's borrow rate via tierBaseJumpRate
      *      - Asset's liquidation bonus via tierLiquidationBonus
      */
     function updateAssetTier(address asset, CollateralTier newTier) external validAsset(asset) onlyRole(MANAGER_ROLE) {
@@ -1240,10 +1244,10 @@ contract Lendefi is
         view
         returns (uint256[4] memory borrowRates, uint256[4] memory liquidationBonuses)
     {
-        borrowRates[0] = tierBaseBorrowRate[CollateralTier.ISOLATED];
-        borrowRates[1] = tierBaseBorrowRate[CollateralTier.CROSS_A];
-        borrowRates[2] = tierBaseBorrowRate[CollateralTier.CROSS_B];
-        borrowRates[3] = tierBaseBorrowRate[CollateralTier.STABLE];
+        borrowRates[0] = tierBaseJumpRate[CollateralTier.ISOLATED];
+        borrowRates[1] = tierBaseJumpRate[CollateralTier.CROSS_A];
+        borrowRates[2] = tierBaseJumpRate[CollateralTier.CROSS_B];
+        borrowRates[3] = tierBaseJumpRate[CollateralTier.STABLE];
 
         liquidationBonuses[0] = tierLiquidationBonus[CollateralTier.ISOLATED];
         liquidationBonuses[1] = tierLiquidationBonus[CollateralTier.CROSS_A];
@@ -1595,17 +1599,17 @@ contract Lendefi is
     }
 
     /**
-     * @notice Determines if a position can be liquidated based on debt and collateral value
+     * @notice Determines if a position can be liquidated based on health factor
      * @param user The address of the position owner
      * @param positionId The ID of the position to check
-     * @dev A position is liquidatable if debt with interest >= collateral value
+     * @dev A position becomes liquidatable when its health factor falls below 1.0
      * @return bool True if position can be liquidated, false otherwise
      * @custom:validation Checks:
-     *      - Position exists (via validPosition modifier)
+     *      - Position exists and is active (via activePosition modifier)
      *      - Position has non-zero debt
      * @custom:calculations Uses:
-     *      - calculateDebtWithInterest() for total debt
-     *      - calculateCreditLimit() for collateral value
+     *      - health factor = (collateral value * liquidation threshold) / debt
+     *      - Position is liquidatable when health factor < 1.0
      */
     function isLiquidatable(address user, uint256 positionId)
         public
@@ -1616,10 +1620,12 @@ contract Lendefi is
         UserPosition storage position = positions[user][positionId];
         if (position.debtAmount == 0) return false;
 
-        uint256 debtWithInterest = calculateDebtWithInterest(user, positionId);
-        uint256 collateralValue = calculateCreditLimit(user, positionId);
+        // Use the health factor which properly accounts for liquidation thresholds
+        // Health factor < 1.0 means position is undercollateralized based on liquidation parameters
+        uint256 healthFactorValue = healthFactor(user, positionId);
 
-        return debtWithInterest >= collateralValue;
+        // Compare against WAD (1.0 in fixed-point representation)
+        return healthFactorValue < WAD;
     }
 
     /**
@@ -1679,7 +1685,7 @@ contract Lendefi is
      * @custom:state-access Read-only access to:
      *      - assetInfo mapping
      *      - totalCollateral mapping
-     *      - tierBaseBorrowRate mapping
+     *      - tierBaseJumpRate mapping
      *      - tierLiquidationBonus mapping
      */
     function getAssetDetails(address asset)
@@ -1894,10 +1900,10 @@ contract Lendefi is
      *          3. Base rate = max(breakEven + baseProfitTarget, baseBorrowRate)
      *          4. Final rate = baseRate + (tierRate * utilization / WAD)
      * @custom:formula
-     *      finalRate = baseRate + (tierBaseBorrowRate[tier] * utilization / WAD)
+     *      finalRate = baseRate + (tierBaseJumpRate[tier] * utilization / WAD)
      * @custom:state-access Read-only access to:
      *      - baseBorrowRate
-     *      - tierBaseBorrowRate mapping
+     *      - tierBaseJumpRate mapping
      *      - utilization rate
      */
     function getBorrowRate(CollateralTier tier) public view returns (uint256) {
@@ -1918,7 +1924,7 @@ contract Lendefi is
         uint256 baseRate = rate > baseBorrowRate ? rate : baseBorrowRate;
 
         // Add tier premium scaled by utilization
-        return baseRate + (tierBaseBorrowRate[tier] * utilization / WAD);
+        return baseRate + (tierBaseJumpRate[tier] * utilization / WAD);
     }
 
     /**
