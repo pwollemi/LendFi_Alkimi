@@ -235,7 +235,7 @@ contract GetUserPositionsCountTest is BasicDeploy {
     function test_PositionStatusAfterLiquidation() public {
         // Setup a liquidatable position
         uint256 collateralAmount = 1 ether;
-        uint256 borrowAmount = 1500e6; // Close to max borrow capacity
+        uint256 borrowAmount = 2000e6; // Close to max borrow capacity
 
         vm.deal(bob, collateralAmount);
         vm.startPrank(bob);
@@ -254,7 +254,7 @@ contract GetUserPositionsCountTest is BasicDeploy {
         vm.stopPrank();
 
         // Drop ETH price to trigger liquidation condition
-        ethOracle.setPrice(int256(1250e8)); // Half the price
+        ethOracle.setPrice(int256(2500e8 * 84 / 100)); // Liquidation threshold is 85%
         ethOracle.setTimestamp(block.timestamp);
 
         // Verify position is now liquidatable
