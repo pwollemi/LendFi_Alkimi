@@ -150,7 +150,7 @@ contract IsLiquidatableTest is BasicDeploy {
 
         // Time passes, interest accrues
         vm.roll(block.number + 10000); // Some blocks pass
-        vm.warp(block.timestamp + 30 days); // 30 days pass
+        vm.warp(block.timestamp + 400 days); // 400 days pass
 
         // Update the oracle after time warp to prevent timeout
         // The oracle must be updated with a fresh timestamp after time warping
@@ -161,13 +161,9 @@ contract IsLiquidatableTest is BasicDeploy {
 
         // Get position details for logging
         uint256 debt = LendefiInstance.calculateDebtWithInterest(alice, positionId);
-        uint256 creditLimit = LendefiInstance.calculateCreditLimit(alice, positionId);
+        uint256 liqLevel = LendefiInstance.calculateCollateralValue(alice, positionId) * 850 / 1000;
 
-        console2.log("Debt after interest accrual:", debt);
-        console2.log("Credit limit:", creditLimit);
-        console2.log("Difference:", debt > creditLimit ? debt - creditLimit : creditLimit - debt);
-
-        if (debt > creditLimit) {
+        if (debt > liqLevel) {
             assertTrue(liquidatable, "Position should be liquidatable after interest accrual");
         } else {
             assertFalse(liquidatable, "Position still not liquidatable after interest accrual");
@@ -207,23 +203,37 @@ contract IsLiquidatableTest is BasicDeploy {
         // Create a position with 1 ETH collateral (worth $2,500)
         uint256 positionId = _createPositionWithCollateral(alice, 1 ether);
 
-        // For CROSS_A tier with 80% borrow threshold, credit limit is exactly $2,000
-        uint256 borrowAmount = 2_000e6; // $2,000 - exactly at the limit
+        // For CROSS_A tier with 80% borrow threshold, credit limit is $2,000
+        uint256 borrowAmount = 1_900e6; // $1,900 - within the limit
         _borrowUSDC(alice, positionId, borrowAmount);
-
-        // Check if exactly at credit limit is liquidatable
         bool liquidatable = LendefiInstance.isLiquidatable(alice, positionId);
+        assertFalse(liquidatable, "Position should not be liquidatable initially");
 
-        // Get position details
-        uint256 debt = LendefiInstance.calculateDebtWithInterest(alice, positionId);
-        uint256 creditLimit = LendefiInstance.calculateCreditLimit(alice, positionId);
+        // Drop ETH price to make position liquidatable
+        wethOracleInstance.setPrice(2250e8); // Drop from $2500 to $2250
+        liquidatable = LendefiInstance.isLiquidatable(alice, positionId);
+        assertFalse(liquidatable, "Position should not be liquidatable after price drop");
+        uint256 healthFactorValue = LendefiInstance.healthFactor(alice, positionId);
+        console2.log("Health factor at 2250:", healthFactorValue);
+        console2.log("Liquidatable at 2250:", liquidatable);
 
-        console2.log("Debt at credit limit:", debt);
-        console2.log("Credit limit:", creditLimit);
+        // Should be liquidatable after price drop
+        // For CROSS_A tier with 80% borrow threshold, credit limit is exactly $2,000, and an 85% liquidation threshold
+        wethOracleInstance.setPrice(2225e8); // Which means that with 1900 borrowed, the position is liquidatable at 2235 (1900/85*100=2235)
+        healthFactorValue = LendefiInstance.healthFactor(alice, positionId);
+        assertTrue(healthFactorValue < 1e6, "Health factor should be less than 1");
+        liquidatable = LendefiInstance.isLiquidatable(alice, positionId);
+        assertTrue(liquidatable, "Position should be liquidatable after price drop");
+        console2.log("Health factor at 2225:", healthFactorValue);
+        console2.log("Liquidatable at 2225:", liquidatable);
 
-        // The isLiquidatable function checks if debt >= collateralValue
-        // So if they're exactly equal, it should be liquidatable
-        assertTrue(liquidatable, "Position exactly at credit limit should be liquidatable");
+        wethOracleInstance.setPrice(2300e8); // Set price back above liquidation zone
+        liquidatable = LendefiInstance.isLiquidatable(alice, positionId);
+        healthFactorValue = LendefiInstance.healthFactor(alice, positionId);
+        assertFalse(liquidatable, "Position should not be liquidatable after price drop");
+        assertTrue(healthFactorValue > 1e6, "Health factor should be greater than 1");
+        console2.log("Health factor at 2300:", healthFactorValue);
+        console2.log("Liquidatable at 2300:", liquidatable);
     }
 
     function test_IsLiquidatable_AfterPartialRepayment() public {
