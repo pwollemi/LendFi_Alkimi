@@ -19,34 +19,14 @@ contract FlashLoanTest is BasicDeploy {
     MockFlashLoanReceiver internal flashLoanReceiver;
 
     function setUp() public {
-        deployComplete();
-        usdcInstance = new USDC();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
-
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
-
-        // Setup roles
-        vm.prank(guardian);
-        ecoInstance.grantRole(REWARDER_ROLE, address(LendefiInstance));
-
-        // Set up flash loan fee
+        // Set up flash loan fee (Lendefi already deployed by deployCompleteWithOracle())
         vm.prank(address(timelockInstance));
         LendefiInstance.updateFlashLoanFee(9); // 9 basis points = 0.09%
 
