@@ -476,7 +476,7 @@ contract HealthFactorTest is BasicDeploy {
     // Test 11: Health factor for liquidated position
     function test_HealthFactorForLiquidatedPosition() public {
         uint256 collateralAmount = 1 ether;
-        uint256 borrowAmount = 1500e6; // Close to max borrow capacity to make liquidation easy
+        uint256 borrowAmount = 2000e6; // Close to max borrow capacity to make liquidation easy
 
         // Setup a position that can be liquidated
         vm.deal(bob, collateralAmount);
@@ -496,7 +496,7 @@ contract HealthFactorTest is BasicDeploy {
         vm.stopPrank();
 
         // Drop ETH price to trigger liquidation condition
-        ethOracle.setPrice(int256(ETH_PRICE / 2)); // Half the price
+        ethOracle.setPrice(int256(ETH_PRICE * 84 / 100)); // 84% of original price
         ethOracle.setTimestamp(block.timestamp);
 
         // Verify position is now liquidatable
@@ -505,11 +505,11 @@ contract HealthFactorTest is BasicDeploy {
         // Setup Charlie as liquidator
         vm.prank(address(timelockInstance));
         treasuryInstance.release(address(tokenInstance), charlie, 50_000 ether); // Give enough gov tokens
-        usdcInstance.mint(charlie, 100_000e6); // Give enough USDC
+        usdcInstance.mint(charlie, 3000e6); // Give enough USDC
 
         // Perform liquidation
         vm.startPrank(charlie);
-        usdcInstance.approve(address(LendefiInstance), 100_000e6);
+        usdcInstance.approve(address(LendefiInstance), 3000e6);
         LendefiInstance.liquidate(bob, positionId);
         vm.stopPrank();
 
