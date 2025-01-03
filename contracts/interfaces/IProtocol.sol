@@ -1071,13 +1071,6 @@ interface IPROTOCOL is IERC20 {
     function tierLiquidationBonus(CollateralTier tier) external view returns (uint256);
 
     /**
-     * @notice Gets the total amount of an asset supplied as collateral
-     * @param asset The address of the asset
-     * @return The total collateral amount
-     */
-    function totalCollateral(address asset) external view returns (uint256);
-
-    /**
      * @notice Adds an additional oracle data source for an asset
      * @param asset Address of the asset
      * @param oracle Address of the Chainlink price feed to add
