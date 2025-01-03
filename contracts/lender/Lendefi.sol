@@ -949,6 +949,59 @@ contract Lendefi is
     }
 
     /**
+     * @notice Moves collateral assets directly between non-isolated positions owned by the same user
+     * @param fromPositionId ID of the source position to transfer from
+     * @param toPositionId ID of the destination position to transfer to
+     * @param asset Address of the collateral asset to transfer
+     * @param amount Amount of the asset to transfer
+     * @dev More gas-efficient than withdrawing and redepositing as no token transfers occur
+     * @custom:security Non-reentrant and pausable to prevent attack vectors
+     * @custom:validation Checks:
+     *  - Both positions must exist and be active (via activePosition modifier)
+     *  - Neither position can be in isolation mode
+     *  - Asset must be listed and active
+     *  - Source position must have sufficient collateral
+     *  - Source position must remain adequately collateralized after transfer
+     *  - Target position must not exceed maximum asset limit (20)
+     * @custom:events Emits:
+     *  - InterPositionalTransfer with details of the transfer
+     */
+    function interpositionalTransfer(uint256 fromPositionId, uint256 toPositionId, address asset, uint256 amount)
+        external
+        activePosition(msg.sender, fromPositionId)
+        activePosition(msg.sender, toPositionId)
+        validAsset(asset)
+        nonReentrant
+        whenNotPaused
+    {
+        // Validate asset is active
+        if (assetInfo[asset].active != 1) {
+            revert AssetDisabled(asset);
+        }
+
+        // Check isolation mode restrictions
+        if (_checkIsolationConstraints(msg.sender, fromPositionId, toPositionId)) {
+            revert IsolationModeForbidden();
+        }
+
+        // Validate source collateral and ensure it remains adequately collateralized
+        _validateAndReduceSourceCollateral(msg.sender, fromPositionId, asset, amount);
+
+        // Update target position
+        _updateTargetPosition(msg.sender, toPositionId, asset, amount);
+
+        // Remove asset from source position if balance becomes zero
+        if (positionCollateralAmounts[msg.sender][fromPositionId][asset] == 0) {
+            // Only remove if not isolated position
+            if (!positions[msg.sender][fromPositionId].isIsolated) {
+                positionCollateralAssets[msg.sender][fromPositionId].remove(asset);
+            }
+        }
+
+        emit InterPositionalTransfer(msg.sender, fromPositionId, toPositionId, asset, amount);
+    }
+
+    /**
      * @notice Updates the base profit target rate for the protocol
      * @param rate The new base profit target rate in parts per million (e.g., 0.0025e6 = 0.25%)
      * @dev Updates the profit target used for calculating protocol fees and rewards
@@ -2081,6 +2134,79 @@ contract Lendefi is
             emit Reward(msg.sender, target);
             ecosystemInstance.reward(msg.sender, target);
         }
+    }
+
+    /**
+     * @notice Checks isolation constraints for interpositional transfers
+     * @param user Address of the position owner
+     * @param sourceId ID of the source position
+     * @param targetId ID of the destination position
+     * @return bool True if either position is isolated (transfers not allowed)
+     * @dev Prevents transfers involving isolated positions as they have special collateral restrictions
+     */
+    function _checkIsolationConstraints(address user, uint256 sourceId, uint256 targetId)
+        internal
+        view
+        returns (bool)
+    {
+        return positions[user][sourceId].isIsolated || positions[user][targetId].isIsolated;
+    }
+
+    /**
+     * @notice Validates and reduces source collateral, ensuring position remains adequately collateralized
+     * @param user Address of the position owner
+     * @param positionId ID of the source position
+     * @param asset Address of the collateral asset
+     * @param amount Amount of the asset to transfer
+     * @dev Combines balance checking, collateral reduction, and collateralization validation in one function
+     * @custom:error InsufficientCollateralBalance if amount exceeds available balance
+     * @custom:error WithdrawalExceedsCreditLimit if remaining collateral doesn't support debt
+     */
+    function _validateAndReduceSourceCollateral(address user, uint256 positionId, address asset, uint256 amount)
+        internal
+    {
+        // Check if source has sufficient collateral
+        uint256 currentBalance = positionCollateralAmounts[user][positionId][asset];
+        if (currentBalance < amount) {
+            revert InsufficientCollateralBalance(user, positionId, asset, amount, currentBalance);
+        }
+
+        // Reduce collateral from source position
+        positionCollateralAmounts[user][positionId][asset] -= amount;
+
+        // Ensure position remains adequately collateralized for its debt
+        UserPosition storage position = positions[user][positionId];
+        if (position.debtAmount > 0) {
+            uint256 creditLimit = calculateCreditLimit(user, positionId);
+            if (creditLimit < position.debtAmount) {
+                revert WithdrawalExceedsCreditLimit(user, positionId, position.debtAmount, creditLimit);
+            }
+        }
+    }
+
+    /**
+     * @notice Updates target position with transferred collateral
+     * @param user Address of the position owner
+     * @param positionId ID of the destination position
+     * @param asset Address of the collateral asset
+     * @param amount Amount of the asset to transfer
+     * @dev Adds the asset to the position's set if not present and increases balance
+     * @custom:error TooManyAssets if position would exceed 20 assets limit
+     */
+    function _updateTargetPosition(address user, uint256 positionId, address asset, uint256 amount) internal {
+        EnumerableSet.AddressSet storage targetAssets = positionCollateralAssets[user][positionId];
+
+        // Handle target position asset management
+        if (!targetAssets.contains(asset)) {
+            // Add to target assets if not already present
+            if (targetAssets.length() >= 20) {
+                revert TooManyAssets(user, positionId);
+            }
+            targetAssets.add(asset);
+        }
+
+        // Increase target position collateral
+        positionCollateralAmounts[user][positionId][asset] += amount;
     }
 
     // Add these overrides right before the _authorizeUpgrade function:
