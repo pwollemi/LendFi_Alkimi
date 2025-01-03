@@ -52,7 +52,13 @@ contract PositionStatusTest is BasicDeploy {
             IPROTOCOL.CollateralTier.CROSS_A,
             0 // No isolation debt cap
         );
+
+        LendefiInstance.updateTierParameters(IPROTOCOL.CollateralTier.CROSS_A, 0.08e6, 0.02e6);
         vm.stopPrank();
+
+        // Log the updated parameters to verify
+        (, uint256[4] memory bonuses) = LendefiInstance.getTierRates();
+        console2.log("CROSS_A tier liquidation bonus:", bonuses[1]);
 
         // Add initial liquidity
         usdcInstance.mint(guardian, INITIAL_LIQUIDITY);
@@ -274,12 +280,12 @@ contract PositionStatusTest is BasicDeploy {
 
         // Calculate credit limit and borrow close to maximum
         uint256 creditLimit = LendefiInstance.calculateCreditLimit(user, positionId);
-        uint256 borrowAmount = (creditLimit * 90) / 100; // 90% of credit limit
-        LendefiInstance.borrow(positionId, borrowAmount);
+        // uint256 borrowAmount = (creditLimit * 90) / 100; // 90% of credit limit
+        LendefiInstance.borrow(positionId, creditLimit);
         vm.stopPrank();
 
         // Crash the price significantly
-        wethOracle.setPrice(int256(1000e8)); // $1000 per ETH (60% drop)
+        wethOracle.setPrice(int256(2124e8)); // $2125 per ETH (15% drop)
 
         // Make sure position is liquidatable
         require(LendefiInstance.isLiquidatable(user, positionId), "Position should be liquidatable");
@@ -313,22 +319,11 @@ contract PositionStatusTest is BasicDeploy {
 
         // Calculate safe borrow amount - borrow very close to the limit
         uint256 creditLimit = LendefiInstance.calculateCreditLimit(user, positionId);
-        uint256 availableLiquidity = LendefiInstance.totalSuppliedLiquidity() - LendefiInstance.totalBorrow();
-
-        // Take 99% of credit limit or 50% of available liquidity (whichever is less)
-        uint256 maxFromCredit = (creditLimit * 99) / 100; // 99% of credit limit
-        uint256 maxFromLiquidity = (availableLiquidity * 50) / 100;
-        uint256 borrowAmount = maxFromCredit < maxFromLiquidity ? maxFromCredit : maxFromLiquidity;
-
-        // Debug logs
-        console2.log("Initial credit limit:", creditLimit);
-        console2.log("Borrowing amount:", borrowAmount);
-
-        LendefiInstance.borrow(positionId, borrowAmount);
+        LendefiInstance.borrow(positionId, creditLimit);
         vm.stopPrank();
 
-        // Crash the price significantly - from $2500 to $1000 (60% drop)
-        wethOracle.setPrice(int256(1000e8));
+        // Crash the price significantly - from $2500 to $2120 (16% drop)
+        wethOracle.setPrice(int256(2500e8 * 84 / 100)); // $2120 per ETH
 
         // Debug output after price drop
         uint256 debtWithInterest = LendefiInstance.calculateDebtWithInterest(user, positionId);
@@ -339,19 +334,19 @@ contract PositionStatusTest is BasicDeploy {
         // Verify position is now liquidatable
         bool isLiquidatable = LendefiInstance.isLiquidatable(user, positionId);
 
-        if (!isLiquidatable) {
-            // If still not liquidatable, force an even bigger price drop
-            wethOracle.setPrice(int256(500e8)); // 80% price drop
-            console2.log("Dropping price further to $500");
-            isLiquidatable = LendefiInstance.isLiquidatable(user, positionId);
+        // if (!isLiquidatable) {
+        //     // If still not liquidatable, force an even bigger price drop
+        //     wethOracle.setPrice(int256(500e8)); // 80% price drop
+        //     console2.log("Dropping price further to $500");
+        //     isLiquidatable = LendefiInstance.isLiquidatable(user, positionId);
 
-            // Still not liquidatable? Try minimal price
-            if (!isLiquidatable) {
-                wethOracle.setPrice(int256(100e8)); // 96% price drop
-                console2.log("Dropping price further to $100");
-                isLiquidatable = LendefiInstance.isLiquidatable(user, positionId);
-            }
-        }
+        //     // Still not liquidatable? Try minimal price
+        //     if (!isLiquidatable) {
+        //         wethOracle.setPrice(int256(100e8)); // 96% price drop
+        //         console2.log("Dropping price further to $100");
+        //         isLiquidatable = LendefiInstance.isLiquidatable(user, positionId);
+        //     }
+        // }
 
         require(isLiquidatable, "Position should be liquidatable after price drop");
 
@@ -381,18 +376,12 @@ contract PositionStatusTest is BasicDeploy {
         // Calculate debt with interest
         uint256 debtWithInterest = LendefiInstance.calculateDebtWithInterest(user, positionId);
 
-        // Get liquidation bonus percentage
-        uint256 liquidationBonus = LendefiInstance.getPositionLiquidationFee(user, positionId);
-
-        // Calculate total debt including bonus
-        uint256 totalDebtWithBonus = debtWithInterest + ((debtWithInterest * liquidationBonus) / 1e6);
-
         // Give liquidator enough USDC to cover the debt with bonus
-        usdcInstance.mint(liquidator, totalDebtWithBonus * 2); // Extra buffer just to be safe
+        usdcInstance.mint(liquidator, debtWithInterest * 2); // Extra buffer just to be safe
 
         // Execute liquidation
         vm.startPrank(liquidator);
-        usdcInstance.approve(address(LendefiInstance), totalDebtWithBonus * 2);
+        usdcInstance.approve(address(LendefiInstance), debtWithInterest * 2);
         LendefiInstance.liquidate(user, positionId);
         vm.stopPrank();
     }
