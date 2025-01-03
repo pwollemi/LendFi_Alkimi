@@ -161,14 +161,6 @@ interface IPROTOCOL is IERC20 {
     event InterestAccrued(address indexed user, uint256 indexed positionId, uint256 amount);
 
     /**
-     * @notice Emitted when a position is liquidated
-     * @param user Address of the position owner
-     * @param positionId ID of the liquidated position
-     * @param amount Debt amount liquidated
-     */
-    event Liquidated(address indexed user, uint256 indexed positionId, uint256 amount);
-
-    /**
      * @notice Emitted when rewards are distributed
      * @param user Address of the reward recipient
      * @param amount Reward amount distributed
@@ -285,14 +277,39 @@ interface IPROTOCOL is IERC20 {
      * @param volatility New maximum age for volatile price data (in seconds)
      */
     event OracleThresholdsUpdated(uint256 freshness, uint256 volatility);
+
+    /**
+     * @notice Emitted when a position is liquidated
+     * @param user The address of the position owner
+     * @param positionId The ID of the inactive position
+     * @param liquidator The address of the liquidator
+     */
+    event Liquidated(address indexed user, uint256 indexed positionId, address liquidator);
+
+    /**
+     * @notice Emitted when a position is liquidated
+     * @param user The address of the position owner
+     * @param positionId The ID of the inactive position
+     * @param debtAmount Debt amount
+     * @param bonusAmount Bonus Amount
+     * @param collateralValue Collateral value
+     * @param healthFactor Health Factor
+     */
+    event LiquidationMetrics(
+        address indexed user,
+        uint256 indexed positionId,
+        uint256 debtAmount,
+        uint256 bonusAmount,
+        uint256 collateralValue,
+        uint256 healthFactor
+    );
+
     /**
      * @notice Thrown when a position ID is invalid for a user
      * @param user The address of the position owner
      * @param positionId The invalid position ID
      */
-
     error InvalidPosition(address user, uint256 positionId);
-
     /**
      * @notice Thrown when a liquidator has insufficient governance tokens
      * @param liquidator The address attempting to liquidate
@@ -530,6 +547,13 @@ interface IPROTOCOL is IERC20 {
      * @param changePercent The percentage change that triggered the breaker
      */
     error CircuitBreakerTriggered(address asset, uint256 currentPrice, uint256 previousPrice, uint256 changePercent);
+
+    /**
+     * @notice Throws when liquidation value is less than liquidation bonus
+     * @param value Liquidation value
+     * @param bonusAmount Liquidator bonus value
+     */
+    error InsufficientLiquidationValue(uint256 value, uint256 bonusAmount);
 
     //////////////////////////////////////////////////
     // ---------------Core functions---------------//
@@ -1061,7 +1085,7 @@ interface IPROTOCOL is IERC20 {
      * @param tier The collateral tier to query
      * @return The tier's base borrow rate (scaled by RAY)
      */
-    function tierBaseBorrowRate(CollateralTier tier) external view returns (uint256);
+    function tierBaseJumpRate(CollateralTier tier) external view returns (uint256);
 
     /**
      * @notice Gets the liquidation bonus percentage for a specific collateral tier
