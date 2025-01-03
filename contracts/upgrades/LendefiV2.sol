@@ -189,11 +189,11 @@ contract LendefiV2 is
 
     /// @notice Base borrow rate for each collateral risk tier
     /// @dev Higher tiers have higher interest rates due to increased risk
-    mapping(CollateralTier => uint256) public tierBaseJumpRate;
+    mapping(CollateralTier => uint256) internal tierJumpRate;
 
     /// @notice Liquidation bonus percentage for each collateral tier
     /// @dev Higher risk tiers have larger liquidation bonuses
-    mapping(CollateralTier => uint256) public tierLiquidationBonus;
+    mapping(CollateralTier => uint256) internal tierLiquidationFee;
 
     /// @notice Timestamp of last reward accrual for each liquidity provider
     /// @dev Used to calculate eligible rewards based on time elapsed
@@ -306,15 +306,15 @@ contract LendefiV2 is
         liquidatorThreshold = 20_000 ether;
 
         // Initialize tier parameters
-        tierBaseJumpRate[CollateralTier.ISOLATED] = 0.15e6; // 15%
-        tierBaseJumpRate[CollateralTier.CROSS_A] = 0.08e6; // 8%
-        tierBaseJumpRate[CollateralTier.CROSS_B] = 0.12e6; // 12%
-        tierBaseJumpRate[CollateralTier.STABLE] = 0.05e6; // 5%
+        tierJumpRate[CollateralTier.ISOLATED] = 0.15e6; // 15%
+        tierJumpRate[CollateralTier.CROSS_B] = 0.12e6; // 12%
+        tierJumpRate[CollateralTier.CROSS_A] = 0.08e6; // 8%
+        tierJumpRate[CollateralTier.STABLE] = 0.05e6; // 5%
 
-        tierLiquidationBonus[CollateralTier.ISOLATED] = 0.06e6; // 15%
-        tierLiquidationBonus[CollateralTier.CROSS_A] = 0.04e6; // 8%
-        tierLiquidationBonus[CollateralTier.CROSS_B] = 0.05e6; // 10%
-        tierLiquidationBonus[CollateralTier.STABLE] = 0.02e6; // 5%
+        tierLiquidationFee[CollateralTier.ISOLATED] = 0.04e6; // 6%
+        tierLiquidationFee[CollateralTier.CROSS_B] = 0.03e6; // 5%
+        tierLiquidationFee[CollateralTier.CROSS_A] = 0.02e6; // 4%
+        tierLiquidationFee[CollateralTier.STABLE] = 0.01e6; // 2%
 
         ++version;
         emit Initialized(msg.sender);
@@ -628,7 +628,7 @@ contract LendefiV2 is
         }
 
         // Remove asset from position assets set if balance becomes 0
-        if (positionCollateralAmounts[msg.sender][positionId][asset] == 0) {
+        if (positionCollateralAmounts[msg.sender][positionId][asset] == 0 && !position.isIsolated) {
             posAssets.remove(asset);
         }
 
@@ -906,31 +906,25 @@ contract LendefiV2 is
 
         // Calculate and track accrued interest
         uint256 interestAccrued = debtWithInterest - position.debtAmount;
-        if (interestAccrued > 0) {
-            totalAccruedBorrowerInterest += interestAccrued;
-        }
+        totalAccruedBorrowerInterest += interestAccrued;
 
         // Get liquidation bonus based on position type
-        uint256 liquidationBonus;
+        uint256 liquidationFee;
         if (position.isIsolated) {
             EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[user][positionId];
-            if (posAssets.length() > 0) {
-                Asset memory asset = assetInfo[posAssets.at(0)];
-                liquidationBonus = tierLiquidationBonus[asset.tier];
-            } else {
-                liquidationBonus = tierLiquidationBonus[CollateralTier.ISOLATED];
-            }
+
+            Asset memory asset = assetInfo[posAssets.at(0)];
+            liquidationFee = tierLiquidationFee[asset.tier];
         } else {
             CollateralTier tier = getHighestTier(user, positionId);
-            liquidationBonus = tierLiquidationBonus[tier];
+            liquidationFee = tierLiquidationFee[tier];
         }
 
         // Calculate total collateral value for logging
         uint256 collateralValue = calculateCollateralValue(user, positionId);
-        uint256 excessCollateralValue = collateralValue - debtWithInterest;
-        uint256 bonusAmount = (debtWithInterest * liquidationBonus / WAD);
-        // Calculate total debt including liquidation bonus
-        uint256 totalDebt = debtWithInterest + excessCollateralValue - bonusAmount;
+        uint256 feeAmount = (debtWithInterest * liquidationFee / WAD);
+        // Calculate total debt including liquidation fee
+        uint256 totalDebt = debtWithInterest + feeAmount;
 
         // Check that liquidator has sufficient USDC balance
         uint256 liquidatorBalance = usdcInstance.balanceOf(msg.sender);
@@ -945,14 +939,9 @@ contract LendefiV2 is
         position.status = PositionStatus.LIQUIDATED;
         totalBorrow -= debtWithInterest;
 
-        // Ensure there's enough excess value to cover the bonus
-        if (excessCollateralValue <= bonusAmount) {
-            revert InsufficientLiquidationValue(excessCollateralValue, bonusAmount);
-        }
-
         // Log liquidation details with more information
         emit Liquidated(user, positionId, msg.sender);
-        emit LiquidationMetrics(user, positionId, debtWithInterest, bonusAmount, collateralValue, healthFactorValue);
+        emit LiquidationMetrics(user, positionId, debtWithInterest, feeAmount, collateralValue, healthFactorValue);
 
         // Transfer debt + bonus from liquidator
         TH.safeTransferFrom(usdcInstance, msg.sender, address(this), totalDebt);
@@ -1072,7 +1061,7 @@ contract LendefiV2 is
      * @notice Updates the risk parameters for a collateral tier
      * @param tier The collateral tier to update
      * @param borrowRate The new base borrow rate for the tier (in parts per million)
-     * @param liquidationBonus The new liquidation bonus for the tier (in parts per million)
+     * @param liquidationFee The new liquidation bonus for the tier (in parts per million)
      * @dev Updates both interest rates and liquidation incentives for a specific risk tier
      * @custom:security Can only be called by accounts with MANAGER_ROLE
      * @custom:validation Checks:
@@ -1081,21 +1070,21 @@ contract LendefiV2 is
      * @custom:events Emits:
      *      - TierParametersUpdated with tier, new borrow rate, and new liquidation bonus
      */
-    function updateTierParameters(CollateralTier tier, uint256 borrowRate, uint256 liquidationBonus)
+    function updateTierParameters(CollateralTier tier, uint256 borrowRate, uint256 liquidationFee)
         external
         onlyRole(MANAGER_ROLE)
     {
         if (borrowRate > 0.25e6) {
             revert RateTooHigh(borrowRate, 0.25e6);
         }
-        if (liquidationBonus > 0.2e6) {
-            revert BonusTooHigh(liquidationBonus, 0.2e6);
+        if (liquidationFee > 0.1e6) {
+            revert FeeTooHigh(liquidationFee, 0.1e6);
         }
 
-        tierBaseJumpRate[tier] = borrowRate;
-        tierLiquidationBonus[tier] = liquidationBonus;
+        tierJumpRate[tier] = borrowRate;
+        tierLiquidationFee[tier] = liquidationFee;
 
-        emit TierParametersUpdated(tier, borrowRate, liquidationBonus);
+        emit TierParametersUpdated(tier, borrowRate, liquidationFee);
     }
 
     /**
@@ -1109,8 +1098,8 @@ contract LendefiV2 is
      * @custom:events Emits:
      *      - AssetTierUpdated with asset address and new tier
      * @custom:impact Changes:
-     *      - Asset's borrow rate via tierBaseJumpRate
-     *      - Asset's liquidation bonus via tierLiquidationBonus
+     *      - Asset's borrow rate via tierJumpRate
+     *      - Asset's liquidation bonus via tierLiquidationFee
      */
     function updateAssetTier(address asset, CollateralTier newTier) external validAsset(asset) onlyRole(MANAGER_ROLE) {
         assetInfo[asset].tier = newTier;
@@ -1232,28 +1221,24 @@ contract LendefiV2 is
     /**
      * @notice Retrieves the current borrow rates and liquidation bonuses for all collateral tiers
      * @dev Returns two fixed arrays containing rates for ISOLATED, CROSS_A, CROSS_B, and STABLE tiers in that order
-     * @return borrowRates Array of borrow rates for each tier [ISOLATED, CROSS_A, CROSS_B, STABLE]
-     * @return liquidationBonuses Array of liquidation bonuses for each tier [ISOLATED, CROSS_A, CROSS_B, STABLE]
+     * @return jumpRates Array of borrow rates for each tier [ISOLATED, CROSS_A, CROSS_B, STABLE]
+     * @return liquidationFees Array of liquidation bonuses for each tier [ISOLATED, CROSS_A, CROSS_B, STABLE]
      * @custom:returns-description Index mapping:
      *      - [0] = ISOLATED tier rates
-     *      - [1] = CROSS_A tier rates
-     *      - [2] = CROSS_B tier rates
+     *      - [1] = CROSS_B tier rates
+     *      - [2] = CROSS_A tier rates
      *      - [3] = STABLE tier rates
      */
-    function getTierRates()
-        external
-        view
-        returns (uint256[4] memory borrowRates, uint256[4] memory liquidationBonuses)
-    {
-        borrowRates[0] = tierBaseJumpRate[CollateralTier.ISOLATED];
-        borrowRates[1] = tierBaseJumpRate[CollateralTier.CROSS_A];
-        borrowRates[2] = tierBaseJumpRate[CollateralTier.CROSS_B];
-        borrowRates[3] = tierBaseJumpRate[CollateralTier.STABLE];
+    function getTierRates() external view returns (uint256[4] memory jumpRates, uint256[4] memory liquidationFees) {
+        jumpRates[0] = tierJumpRate[CollateralTier.ISOLATED];
+        jumpRates[1] = tierJumpRate[CollateralTier.CROSS_B];
+        jumpRates[2] = tierJumpRate[CollateralTier.CROSS_A];
+        jumpRates[3] = tierJumpRate[CollateralTier.STABLE];
 
-        liquidationBonuses[0] = tierLiquidationBonus[CollateralTier.ISOLATED];
-        liquidationBonuses[1] = tierLiquidationBonus[CollateralTier.CROSS_A];
-        liquidationBonuses[2] = tierLiquidationBonus[CollateralTier.CROSS_B];
-        liquidationBonuses[3] = tierLiquidationBonus[CollateralTier.STABLE];
+        liquidationFees[0] = tierLiquidationFee[CollateralTier.ISOLATED];
+        liquidationFees[1] = tierLiquidationFee[CollateralTier.CROSS_B];
+        liquidationFees[2] = tierLiquidationFee[CollateralTier.CROSS_A];
+        liquidationFees[3] = tierLiquidationFee[CollateralTier.STABLE];
     }
 
     /**
@@ -1476,22 +1461,14 @@ contract LendefiV2 is
 
         if (position.isIsolated) {
             EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[user][positionId];
-
-            // Check if there are any assets in the set
-            if (posAssets.length() > 0) {
-                // Use EnumerableSet's at() method to access the first element
-                address isolatedAsset = posAssets.at(0);
-                Asset memory asset = assetInfo[isolatedAsset];
-                return tierLiquidationBonus[asset.tier];
-            } else {
-                // Fallback to ISOLATED tier if no assets found (shouldn't happen)
-                return tierLiquidationBonus[CollateralTier.ISOLATED];
-            }
+            address isolatedAsset = posAssets.at(0);
+            Asset memory asset = assetInfo[isolatedAsset];
+            return tierLiquidationFee[asset.tier];
         }
 
         // For cross-collateral positions, use the highest tier
         CollateralTier tier = getHighestTier(user, positionId);
-        return tierLiquidationBonus[tier];
+        return tierLiquidationFee[tier];
     }
 
     /**
@@ -1677,7 +1654,7 @@ contract LendefiV2 is
      * @return totalSupplied Total amount of asset supplied as collateral
      * @return maxSupply Maximum supply threshold allowed
      * @return borrowRate Current borrow rate for the asset's tier
-     * @return liquidationBonus Liquidation bonus percentage for the asset's tier
+     * @return liquidationFee Liquidation bonus percentage for the asset's tier
      * @return tier Risk classification tier of the asset
      * @dev Aggregates asset configuration and current state into a single view
      * @custom:calculations Uses:
@@ -1686,8 +1663,8 @@ contract LendefiV2 is
      * @custom:state-access Read-only access to:
      *      - assetInfo mapping
      *      - totalCollateral mapping
-     *      - tierBaseJumpRate mapping
-     *      - tierLiquidationBonus mapping
+     *      - tierJumpRate mapping
+     *      - tierLiquidationFee mapping
      */
     function getAssetDetails(address asset)
         public
@@ -1697,7 +1674,7 @@ contract LendefiV2 is
             uint256 totalSupplied,
             uint256 maxSupply,
             uint256 borrowRate,
-            uint256 liquidationBonus,
+            uint256 liquidationFee,
             CollateralTier tier
         )
     {
@@ -1706,7 +1683,7 @@ contract LendefiV2 is
         totalSupplied = assetTVL[asset];
         maxSupply = assetConfig.maxSupplyThreshold;
         borrowRate = getBorrowRate(assetConfig.tier);
-        liquidationBonus = tierLiquidationBonus[assetConfig.tier];
+        liquidationFee = tierLiquidationFee[assetConfig.tier];
         tier = assetConfig.tier;
     }
 
@@ -1901,10 +1878,10 @@ contract LendefiV2 is
      *          3. Base rate = max(breakEven + baseProfitTarget, baseBorrowRate)
      *          4. Final rate = baseRate + (tierRate * utilization / WAD)
      * @custom:formula
-     *      finalRate = baseRate + (tierBaseJumpRate[tier] * utilization / WAD)
+     *      finalRate = baseRate + (tierJumpRate[tier] * utilization / WAD)
      * @custom:state-access Read-only access to:
      *      - baseBorrowRate
-     *      - tierBaseJumpRate mapping
+     *      - tierJumpRate mapping
      *      - utilization rate
      */
     function getBorrowRate(CollateralTier tier) public view returns (uint256) {
@@ -1925,7 +1902,7 @@ contract LendefiV2 is
         uint256 baseRate = rate > baseBorrowRate ? rate : baseBorrowRate;
 
         // Add tier premium scaled by utilization
-        return baseRate + (tierBaseJumpRate[tier] * utilization / WAD);
+        return baseRate + (tierJumpRate[tier] * utilization / WAD);
     }
 
     /**
@@ -1953,7 +1930,7 @@ contract LendefiV2 is
      * @notice Gets the base liquidation bonus percentage for a specific collateral tier
      * @param tier The collateral tier to query
      * @return uint256 The liquidation bonus rate in parts per million (e.g., 0.05e6 = 5%)
-     * @dev Direct accessor for tierLiquidationBonus mapping without additional calculations
+     * @dev Direct accessor for tierLiquidationFee mapping without additional calculations
      * @custom:values Typical values:
      *      - STABLE: 5% (0.05e6)
      *      - CROSS_A: 8% (0.08e6)
@@ -1961,7 +1938,7 @@ contract LendefiV2 is
      *      - ISOLATED: 15% (0.15e6)
      */
     function getTierLiquidationFee(CollateralTier tier) public view returns (uint256) {
-        return tierLiquidationBonus[tier];
+        return tierLiquidationFee[tier];
     }
 
     /**
