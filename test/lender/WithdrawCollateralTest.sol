@@ -182,7 +182,7 @@ contract WithdrawCollateralTest is BasicDeploy {
         _supplyCollateral(bob, address(wethInstance), collateralAmount, positionId);
 
         uint256 initialTVL = LendefiInstance.assetTVL(address(wethInstance));
-        uint256 initialTotalCollateral = LendefiInstance.totalCollateral(address(wethInstance));
+        uint256 initialTotalCollateral = LendefiInstance.assetTVL(address(wethInstance));
         uint256 initialBobBalance = wethInstance.balanceOf(bob);
 
         vm.startPrank(bob);
@@ -200,7 +200,7 @@ contract WithdrawCollateralTest is BasicDeploy {
 
         // Verify state changes
         uint256 finalTVL = LendefiInstance.assetTVL(address(wethInstance));
-        uint256 finalTotalCollateral = LendefiInstance.totalCollateral(address(wethInstance));
+        uint256 finalTotalCollateral = LendefiInstance.assetTVL(address(wethInstance));
         uint256 positionCollateral = LendefiInstance.getUserCollateralAmount(bob, positionId, address(wethInstance));
         uint256 finalBobBalance = wethInstance.balanceOf(bob);
 
