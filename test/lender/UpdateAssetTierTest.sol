@@ -16,32 +16,19 @@ contract UpdateAssetTierTest is BasicDeploy {
     MockPriceOracle internal usdcOracle;
 
     function setUp() public {
-        deployComplete();
+        // Use the complete deployment function that includes Oracle module
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy USDC
-        usdcInstance = new USDC();
+        // Deploy WETH if not already deployed
+        if (address(wethInstance) == address(0)) {
+            wethInstance = new WETH9();
+        }
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
-
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
-
-        // Set up oracles
+        // Set up mock oracles - use MockPriceOracle for more control over test values
         wethOracle = new MockPriceOracle();
         wethOracle.setPrice(2500e8); // $2500 per ETH
         wethOracle.setTimestamp(block.timestamp);
@@ -54,8 +41,13 @@ contract UpdateAssetTierTest is BasicDeploy {
         usdcOracle.setRoundId(1);
         usdcOracle.setAnsweredInRound(1);
 
-        // Set up mock assets in the protocol
+        // Register oracles with Oracle module
         vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracle), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracle));
+
+        oracleInstance.addOracle(address(usdcInstance), address(usdcOracle), 8);
+        oracleInstance.setPrimaryOracle(address(usdcInstance), address(usdcOracle));
 
         // Add WETH as CROSS_A initially
         LendefiInstance.updateAssetConfig(
