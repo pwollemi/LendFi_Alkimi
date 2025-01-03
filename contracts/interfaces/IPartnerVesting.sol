@@ -7,14 +7,45 @@ pragma solidity 0.8.23;
  */
 interface IPARTNERVESTING {
     /**
-     * @dev Emitted when partner vesting is cancelled and remaining tokens returned to timelock
+     * @notice Emitted when the vesting contract is initialized
+     * @param token Address of the ERC20 token being vested
+     * @param beneficiary Address that will receive the vested tokens
+     * @param timelock Address of the governance timelock
+     * @param startTimestamp When the vesting schedule starts
+     * @param duration Length of the vesting period in seconds
      */
-    event Cancelled(uint256 amount);
+    event VestingInitialized(
+        address indexed token,
+        address indexed beneficiary,
+        address indexed timelock,
+        uint64 startTimestamp,
+        uint64 duration
+    );
 
     /**
-     * @dev Emitted when tokens are released to the beneficiary
+     * @notice Emitted when the vesting contract is cancelled
+     * @param remainingTokens Amount of unvested tokens returned to the creator
+     */
+    event Cancelled(uint256 remainingTokens);
+
+    /**
+     * @notice Emitted when tokens are released to the beneficiary
+     * @param token Address of the ERC20 token being released
+     * @param amount Amount of tokens released
      */
     event ERC20Released(address indexed token, uint256 amount);
+
+    /**
+     * @notice Unauthorized access attempt
+     * @dev Thrown when a function restricted to the creator is called by someone else
+     */
+    error Unauthorized();
+
+    /**
+     * @notice Zero address provided for a critical parameter
+     * @dev Thrown when token, timelock, or beneficiary address is zero
+     */
+    error ZeroAddress();
 
     /**
      * @notice Cancels the vesting contract and returns unvested funds to timelock
