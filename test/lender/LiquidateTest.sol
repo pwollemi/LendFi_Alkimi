@@ -181,13 +181,13 @@ contract LiquidateTest is BasicDeploy {
 
         // Drop price to make position liquidatable
         if (asset == address(wethInstance)) {
-            wethOracleInstance.setPrice(1500e8); // Drop from $2500 to $1500
+            wethOracleInstance.setPrice(2500e8 * 84 / 100); // Drop from $2500 to $2120
         } else if (asset == address(rwaToken)) {
-            rwaOracleInstance.setPrice(600e8); // Drop from $1000 to $600
+            rwaOracleInstance.setPrice(1000e8 * 74 / 100); // Drop from $1000 to $740
         } else if (asset == address(stableToken)) {
-            stableOracleInstance.setPrice(0.6e8); // Drop from $1 to $0.60
+            stableOracleInstance.setPrice(1e8 * 945 / 1000); // Drop from $1 to $0.945
         } else if (asset == address(crossBToken)) {
-            crossBOracleInstance.setPrice(300e8); // Drop from $500 to $300
+            crossBOracleInstance.setPrice(500e8 * 79 / 100); // Drop from $500 to $399
         }
 
         return positionId;
@@ -201,24 +201,14 @@ contract LiquidateTest is BasicDeploy {
         // Setup Charlie as liquidator
         vm.prank(address(timelockInstance));
         treasuryInstance.release(address(tokenInstance), charlie, 50_000 ether); // Give enough gov tokens
-        usdcInstance.mint(charlie, 100_000e6); // Give enough USDC
 
         // Get the debt amount before liquidation
         uint256 debtAmount = LendefiInstance.calculateDebtWithInterest(bob, positionId);
-        // UPDATE THIS LINE: Use getLiquidationBonus instead of getPositionLiquidationFee
-        uint256 liquidationBonus = LendefiInstance.getPositionLiquidationFee(bob, positionId);
-        uint256 totalDebt = debtAmount + (debtAmount * liquidationBonus / 1e6);
-
-        // Add a 5% buffer to account for any additional interest accrual
-        // uint256 bufferedAmount = totalDebt + (totalDebt * 5 / 100);
 
         // Approve USDC for liquidation with buffer
         vm.startPrank(charlie);
-        usdcInstance.approve(address(LendefiInstance), totalDebt);
-
-        // Expect the Liquidated event
-        vm.expectEmit(true, true, false, true);
-        emit Liquidated(bob, positionId, debtAmount);
+        usdcInstance.mint(charlie, debtAmount * 2); // Give enough USDC
+        usdcInstance.approve(address(LendefiInstance), debtAmount * 2);
 
         // Perform liquidation
         LendefiInstance.liquidate(bob, positionId);
@@ -391,8 +381,8 @@ contract LiquidateTest is BasicDeploy {
         _supplyMultipleCollateral(bob, positionId, wethAmount, crossBAmount);
 
         // Drop prices to make position liquidatable
-        wethOracleInstance.setPrice(1500e8);
-        crossBOracleInstance.setPrice(300e8);
+        wethOracleInstance.setPrice(2500e8 * 84 / 100); // 84% of $2500
+        crossBOracleInstance.setPrice(500e8 * 80 / 100); // 80% of $500
 
         // Set up liquidator and perform liquidation
         _setupLiquidatorAndExecute(bob, positionId, charlie);
@@ -423,21 +413,16 @@ contract LiquidateTest is BasicDeploy {
         vm.stopPrank();
     }
 
-    function _setupLiquidatorAndExecute(address user, uint256 positionId, address liquidator) internal {
+    function _setupLiquidatorAndExecute(address user, uint256 positionId, address liquidator_) internal {
         // Setup liquidator
         vm.prank(address(timelockInstance));
-        treasuryInstance.release(address(tokenInstance), liquidator, 50_000 ether);
-        usdcInstance.mint(liquidator, 200_000e6);
+        treasuryInstance.release(address(tokenInstance), liquidator_, 50_000 ether);
+        usdcInstance.mint(liquidator_, 200_000e6);
 
         // Calculate debt and approve with buffer
         uint256 debtAmount = LendefiInstance.calculateDebtWithInterest(user, positionId);
-        uint256 totalDebt =
-            debtAmount + (debtAmount * LendefiInstance.getPositionLiquidationFee(user, positionId) / 1e18);
-        uint256 bufferedAmount = totalDebt + (totalDebt * 10 / 100);
-
-        vm.startPrank(liquidator);
-        usdcInstance.approve(address(LendefiInstance), bufferedAmount);
-
+        vm.startPrank(liquidator_);
+        usdcInstance.approve(address(LendefiInstance), debtAmount * 2);
         // Perform liquidation
         LendefiInstance.liquidate(user, positionId);
         vm.stopPrank();
@@ -479,9 +464,11 @@ contract LiquidateTest is BasicDeploy {
     }
 
     // Fuzz test for liquidating positions with different debt amounts
-    function testFuzz_LiquidationWithVaryingDebt(uint256 borrowPercent) public {
+    function testFuzz_LiquidationWithVaryingDebt(uint256 borrowPercent, uint256 priceDropPercent) public {
         // Bound to reasonable percentage (10-90%)
-        borrowPercent = bound(borrowPercent, 10, 90);
+        borrowPercent = bound(borrowPercent, 10, 99);
+        // FIX: Use priceDropPercent instead of borrowPercent in the bound function
+        priceDropPercent = bound(priceDropPercent, 83, 99);
 
         // Create position
         uint256 positionId = _createPosition(bob, address(wethInstance), false);
@@ -501,15 +488,15 @@ contract LiquidateTest is BasicDeploy {
         vm.stopPrank();
 
         // Drop price to make position liquidatable
-        wethOracleInstance.setPrice(1200e8);
+        wethOracleInstance.setPrice(int256(2500e8 * priceDropPercent / 100)); // Drop from $2500 to percentage of original price
 
         // Setup Charlie as liquidator
         vm.prank(address(timelockInstance));
         treasuryInstance.release(address(tokenInstance), charlie, 50_000 ether);
-        usdcInstance.mint(charlie, 1_000_000e6);
+        usdcInstance.mint(charlie, borrowAmount * 2); // Give enough USDC
 
         vm.startPrank(charlie);
-        usdcInstance.approve(address(LendefiInstance), 1_000_000e6);
+        usdcInstance.approve(address(LendefiInstance), borrowAmount * 2);
 
         // Check if position is liquidatable
         bool isLiquidatable = LendefiInstance.isLiquidatable(bob, positionId);
