@@ -29,6 +29,7 @@ import {TeamManager} from "../contracts/ecosystem/TeamManager.sol";
 import {TeamManagerV2} from "../contracts/upgrades/TeamManagerV2.sol";
 import {Lendefi} from "../contracts/lender/Lendefi.sol";
 import {LendefiV2} from "../contracts/upgrades/LendefiV2.sol";
+import {LendefiOracle} from "../contracts/oracle/LendefiOracle.sol";
 
 contract BasicDeploy is Test {
     event Upgrade(address indexed src, address indexed implementation);
@@ -75,7 +76,8 @@ contract BasicDeploy is Test {
     USDC internal usdcInstance; // mock usdc
     WETH9 internal wethInstance;
     Lendefi internal LendefiInstance;
-    WETHPriceConsumerV3 internal oracleInstance;
+    LendefiOracle internal oracleInstance;
+    // WETHPriceConsumerV3 internal oracleInstance;
     IERC20 usdc = IERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
 
     function deployTokenUpgrade() internal {
@@ -384,5 +386,87 @@ contract BasicDeploy is Test {
         tmInstance = TeamManager(proxy);
         address implementation = Upgrades.getImplementationAddress(proxy);
         assertFalse(address(tmInstance) == implementation);
+    }
+
+    function _deployOracle() internal {
+        // Oracle deploy
+        bytes memory data = abi.encodeCall(LendefiOracle.initialize, (guardian, address(timelockInstance)));
+
+        address payable proxy = payable(Upgrades.deployUUPSProxy("LendefiOracle.sol", data));
+        oracleInstance = LendefiOracle(proxy);
+
+        address oracleImplementation = Upgrades.getImplementationAddress(proxy);
+        assertFalse(address(oracleInstance) == oracleImplementation);
+
+        // Grant necessary roles
+        vm.startPrank(guardian);
+        oracleInstance.grantRole(oracleInstance.ORACLE_MANAGER_ROLE(), address(timelockInstance));
+        oracleInstance.grantRole(oracleInstance.CIRCUIT_BREAKER_ROLE(), address(timelockInstance));
+        vm.stopPrank();
+    }
+
+    function _deployLendefi() internal {
+        // Make sure oracle is deployed first
+        if (address(oracleInstance) == address(0)) {
+            _deployOracle();
+        }
+
+        // Now deploy Lendefi with oracle address
+        bytes memory data = abi.encodeCall(
+            Lendefi.initialize,
+            (
+                address(usdcInstance),
+                address(tokenInstance),
+                address(ecoInstance),
+                address(treasuryInstance),
+                address(timelockInstance),
+                guardian,
+                address(oracleInstance)
+            )
+        );
+
+        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
+        LendefiInstance = Lendefi(proxy);
+
+        address lendingImplementation = Upgrades.getImplementationAddress(proxy);
+        assertFalse(address(LendefiInstance) == lendingImplementation);
+    }
+
+    function deployCompleteWithOracle() internal {
+        vm.warp(365 days);
+        _deployToken();
+        _deployTimelock();
+        _deployEcosystem();
+        _deployTreasury();
+        _deployGovernor();
+        _deployOracle(); // Deploy the oracle
+
+        // Deploy mock tokens and oracles for testing
+        usdcInstance = new USDC();
+        // wethInstance = new WETH9();
+
+        // Deploy the main Lendefi contract with all dependencies
+        bytes memory data = abi.encodeCall(
+            Lendefi.initialize,
+            (
+                address(usdcInstance),
+                address(tokenInstance),
+                address(ecoInstance),
+                address(treasuryInstance),
+                address(timelockInstance),
+                guardian,
+                address(oracleInstance)
+            )
+        );
+
+        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
+        LendefiInstance = Lendefi(proxy);
+
+        // Setup roles
+        vm.startPrank(guardian);
+        timelockInstance.grantRole(PROPOSER_ROLE, address(govInstance));
+        timelockInstance.grantRole(EXECUTOR_ROLE, address(govInstance));
+        timelockInstance.grantRole(CANCELLER_ROLE, address(govInstance));
+        vm.stopPrank();
     }
 }
