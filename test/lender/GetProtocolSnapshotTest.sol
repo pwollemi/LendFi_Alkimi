@@ -16,35 +16,24 @@ contract GetProtocolSnapshotTest is BasicDeploy {
     uint256 constant BORROW_AMOUNT = 500_000e6; // 500K USDC
 
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy USDC
-        usdcInstance = new USDC();
-
         // Deploy test token and oracle
+        // Note: usdcInstance is already deployed by deployCompleteWithOracle()
         testToken = new MockRWA("Test Token", "TEST");
         testOracle = new RWAPriceConsumerV3();
         testOracle.setPrice(1000e8); // $1000 per token
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
-
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        // Register the test token with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(testToken), address(testOracle), 8);
+        oracleInstance.setPrimaryOracle(address(testToken), address(testOracle));
+        vm.stopPrank();
 
         // Configure asset for testing
         vm.prank(address(timelockInstance));
@@ -65,8 +54,8 @@ contract GetProtocolSnapshotTest is BasicDeploy {
         vm.prank(address(timelockInstance));
         LendefiInstance.updateFlashLoanFee(10); // 0.1% fee
     }
-
     // Test 1: Snapshot reflects initial state
+
     function test_SnapshotReflectsInitialState() public {
         // Get initial protocol snapshot
         IPROTOCOL.ProtocolSnapshot memory snapshot = LendefiInstance.getProtocolSnapshot();
