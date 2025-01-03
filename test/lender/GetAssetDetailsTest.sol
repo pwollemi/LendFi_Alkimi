@@ -200,7 +200,7 @@ contract GetAssetDetailsTest is BasicDeploy {
 
         // FIX: Get rates directly from contract
         uint256 expectedBorrowRate = LendefiInstance.getBorrowRate(IPROTOCOL.CollateralTier.CROSS_A);
-        uint256 expectedLiquidationBonus = LendefiInstance.tierLiquidationBonus(IPROTOCOL.CollateralTier.CROSS_A);
+        uint256 expectedLiquidationBonus = LendefiInstance.getTierLiquidationFee(IPROTOCOL.CollateralTier.CROSS_A);
 
         assertEq(borrowRate, expectedBorrowRate, "WETH borrow rate should match expected rate");
         assertEq(liquidationBonus, expectedLiquidationBonus, "WETH liquidation bonus should match expected bonus");
@@ -222,10 +222,10 @@ contract GetAssetDetailsTest is BasicDeploy {
             LendefiInstance.getAssetDetails(address(uniInstance));
 
         // FIX: Get liquidation bonuses directly without uint8 casts
-        uint256 expectedWethLiquidationBonus = LendefiInstance.tierLiquidationBonus(IPROTOCOL.CollateralTier.CROSS_A);
-        uint256 expectedUsdcLiquidationBonus = LendefiInstance.tierLiquidationBonus(IPROTOCOL.CollateralTier.STABLE);
-        uint256 expectedLinkLiquidationBonus = LendefiInstance.tierLiquidationBonus(IPROTOCOL.CollateralTier.ISOLATED);
-        uint256 expectedUniLiquidationBonus = LendefiInstance.tierLiquidationBonus(IPROTOCOL.CollateralTier.CROSS_B);
+        uint256 expectedWethLiquidationBonus = LendefiInstance.getTierLiquidationFee(IPROTOCOL.CollateralTier.CROSS_A);
+        uint256 expectedUsdcLiquidationBonus = LendefiInstance.getTierLiquidationFee(IPROTOCOL.CollateralTier.STABLE);
+        uint256 expectedLinkLiquidationBonus = LendefiInstance.getTierLiquidationFee(IPROTOCOL.CollateralTier.ISOLATED);
+        uint256 expectedUniLiquidationBonus = LendefiInstance.getTierLiquidationFee(IPROTOCOL.CollateralTier.CROSS_B);
 
         // Verify tiers
         assertEq(uint256(wethTier), uint256(IPROTOCOL.CollateralTier.CROSS_A), "WETH tier should be CROSS_A");
@@ -284,7 +284,8 @@ contract GetAssetDetailsTest is BasicDeploy {
 
         // Get expected rates based on what's in the contract
         uint256 expectedInitialBorrowRate = LendefiInstance.getBorrowRate(IPROTOCOL.CollateralTier.CROSS_A);
-        uint256 expectedInitialLiquidationBonus = LendefiInstance.tierLiquidationBonus(IPROTOCOL.CollateralTier.CROSS_A);
+        uint256 expectedInitialLiquidationBonus =
+            LendefiInstance.getTierLiquidationFee(IPROTOCOL.CollateralTier.CROSS_A);
 
         // Update WETH to CROSS_B tier
         vm.prank(address(timelockInstance));
@@ -296,7 +297,7 @@ contract GetAssetDetailsTest is BasicDeploy {
 
         // Get expected new rates
         uint256 expectedNewBorrowRate = LendefiInstance.getBorrowRate(IPROTOCOL.CollateralTier.CROSS_B);
-        uint256 expectedNewLiquidationBonus = LendefiInstance.tierLiquidationBonus(IPROTOCOL.CollateralTier.CROSS_B);
+        uint256 expectedNewLiquidationBonus = LendefiInstance.getTierLiquidationFee(IPROTOCOL.CollateralTier.CROSS_B);
 
         // Verify tier changed
         assertEq(uint256(initialTier), uint256(IPROTOCOL.CollateralTier.CROSS_A), "Initial tier should be CROSS_A");
