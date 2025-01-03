@@ -72,7 +72,6 @@ import {IERC20, SafeERC20 as TH} from "@openzeppelin/contracts/token/ERC20/utils
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import {AggregatorV3Interface} from "../vendor/@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {ERC20PausableUpgradeable} from
     "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PausableUpgradeable.sol";
@@ -181,9 +180,7 @@ contract Lendefi is
     mapping(address => mapping(uint256 => mapping(address => uint256))) internal positionCollateralAmounts;
     /// @notice List of assets used as collateral in each position
     /// @dev Maps user address and position ID to array of collateral asset addresses
-    mapping(address => mapping(uint256 => address[])) internal positionCollateralAssets;
-    /// @dev borrower address position mapping used to remove positonCollateralAssets when needed
-    mapping(address src => mapping(uint256 => mapping(address => uint256 pos))) internal pcaPos;
+    mapping(address => mapping(uint256 => EnumerableSet.AddressSet)) internal positionCollateralAssets;
 
     /// @notice Total value locked of each supported asset
     /// @dev Tracks how much of each asset is held by the protocol
@@ -196,10 +193,6 @@ contract Lendefi is
     /// @notice Liquidation bonus percentage for each collateral tier
     /// @dev Higher risk tiers have larger liquidation bonuses
     mapping(CollateralTier => uint256) public tierLiquidationBonus;
-
-    /// @notice Total amount of each asset used as collateral
-    /// @dev Used for tracking collateral usage and supply caps
-    mapping(address => uint256) public totalCollateral;
 
     /// @notice Timestamp of last reward accrual for each liquidity provider
     /// @dev Used to calculate eligible rewards based on time elapsed
@@ -556,17 +549,12 @@ contract Lendefi is
             revert AssetDisabled(asset);
         }
 
-        if (totalCollateral[asset] + amount > assetConfig.maxSupplyThreshold) {
-            revert SupplyCapExceeded(asset, totalCollateral[asset] + amount, assetConfig.maxSupplyThreshold);
+        if (assetTVL[asset] + amount > assetConfig.maxSupplyThreshold) {
+            revert SupplyCapExceeded(asset, assetTVL[asset] + amount, assetConfig.maxSupplyThreshold);
         }
 
         UserPosition storage position = positions[msg.sender][positionId];
-        address[] storage posAssets = positionCollateralAssets[msg.sender][positionId];
-
-        // Verify position is active
-        if (position.status != PositionStatus.ACTIVE) {
-            revert InactivePosition(msg.sender, positionId);
-        }
+        EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[msg.sender][positionId];
 
         // Check if this is an ISOLATED tier asset being added to a cross-collateral position
         if (assetConfig.tier == CollateralTier.ISOLATED && !position.isIsolated) {
@@ -574,33 +562,20 @@ contract Lendefi is
         }
 
         // Isolation mode checks
-        if (position.isIsolated && posAssets.length > 0 && asset != posAssets[0]) {
-            revert InvalidPositionAsset(msg.sender, positionId, asset, posAssets[0]);
+        if (position.isIsolated && posAssets.length() > 0 && asset != posAssets.at(0)) {
+            revert InvalidPositionAsset(msg.sender, positionId, asset, posAssets.at(0));
         }
 
-        // Check if asset needs to be added to the position's assets array
-        bool assetAlreadyAdded = false;
-
-        // For isolated positions created with this asset, it should already be in the array
-        if (posAssets.length > 0) {
-            // Check if the position of this asset in the array is valid
-            uint256 assetPos = pcaPos[msg.sender][positionId][asset];
-            if (assetPos < posAssets.length && posAssets[assetPos] == asset) {
-                assetAlreadyAdded = true;
-            }
-        }
-
-        // Add asset to positionCollateralAssets array if not already present
-        if (!assetAlreadyAdded) {
-            if (posAssets.length >= 20) {
+        // Check max assets limit
+        if (!posAssets.contains(asset)) {
+            if (posAssets.length() >= 20) {
                 revert TooManyAssets(msg.sender, positionId);
             }
-            pcaPos[msg.sender][positionId][asset] = posAssets.length;
-            posAssets.push(asset);
+            // Add to set - returns true if successfully added
+            posAssets.add(asset);
         }
 
         positionCollateralAmounts[msg.sender][positionId][asset] += amount;
-        totalCollateral[asset] += amount;
         assetTVL[asset] += amount;
 
         emit TVLUpdated(asset, assetTVL[asset]);
@@ -629,17 +604,11 @@ contract Lendefi is
         whenNotPaused
     {
         UserPosition storage position = positions[msg.sender][positionId];
-
-        // Verify position is active
-        if (position.status != PositionStatus.ACTIVE) {
-            revert InactivePosition(msg.sender, positionId);
-        }
-
-        address[] storage posAssets = positionCollateralAssets[msg.sender][positionId];
+        EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[msg.sender][positionId];
 
         // Check isolation mode constraints
-        if (position.isIsolated && asset != posAssets[0]) {
-            revert InvalidPositionAsset(msg.sender, positionId, asset, posAssets[0]);
+        if (position.isIsolated && asset != posAssets.at(0)) {
+            revert InvalidPositionAsset(msg.sender, positionId, asset, posAssets.at(0));
         }
 
         uint256 currentBalance = positionCollateralAmounts[msg.sender][positionId][asset];
@@ -649,7 +618,6 @@ contract Lendefi is
 
         // First reduce the collateral
         positionCollateralAmounts[msg.sender][positionId][asset] -= amount;
-        totalCollateral[asset] -= amount;
         assetTVL[asset] -= amount;
 
         // Then check if remaining collateral supports existing debt
@@ -658,17 +626,9 @@ contract Lendefi is
             revert WithdrawalExceedsCreditLimit(msg.sender, positionId, position.debtAmount, creditLimit);
         }
 
-        // Remove asset from position assets array if balance becomes 0
+        // Remove asset from position assets set if balance becomes 0
         if (positionCollateralAmounts[msg.sender][positionId][asset] == 0) {
-            uint256 ipos = pcaPos[msg.sender][positionId][asset];
-            uint256 len = posAssets.length;
-            posAssets[ipos] = posAssets[len - 1];
-            posAssets.pop();
-
-            // Update the pcaPos mapping for the swapped asset
-            if (ipos < len - 1) {
-                pcaPos[msg.sender][positionId][posAssets[ipos]] = ipos;
-            }
+            posAssets.remove(asset);
         }
 
         emit TVLUpdated(asset, assetTVL[asset]);
@@ -693,9 +653,11 @@ contract Lendefi is
         UserPosition storage newPosition = positions[msg.sender].push();
         newPosition.isIsolated = isIsolated;
         newPosition.status = PositionStatus.ACTIVE;
+
         if (isIsolated) {
-            address[] storage assets = positionCollateralAssets[msg.sender][positions[msg.sender].length - 1];
-            assets.push(asset);
+            EnumerableSet.AddressSet storage assets =
+                positionCollateralAssets[msg.sender][positions[msg.sender].length - 1];
+            assets.add(asset);
         }
 
         emit PositionCreated(msg.sender, positions[msg.sender].length - 1, isIsolated);
@@ -738,7 +700,12 @@ contract Lendefi is
 
         // Check isolation mode constraints if applicable
         if (position.isIsolated) {
-            address posAsset = positionCollateralAssets[msg.sender][positionId][0];
+            EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[msg.sender][positionId];
+            if (posAssets.length() == 0) {
+                revert NoIsolatedCollateral(msg.sender, positionId, address(0));
+            }
+
+            address posAsset = posAssets.at(0);
             Asset memory asset = assetInfo[posAsset];
 
             // Check isolation debt cap
@@ -853,7 +820,7 @@ contract Lendefi is
         whenNotPaused
     {
         UserPosition storage position = positions[msg.sender][positionId];
-        address[] storage posAssets = positionCollateralAssets[msg.sender][positionId];
+        EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[msg.sender][positionId];
 
         // If there's debt, repay it first
         if (position.debtAmount > 0) {
@@ -873,21 +840,28 @@ contract Lendefi is
         }
 
         // Withdraw all collateral
-        for (uint256 i = 0; i < posAssets.length; i++) {
-            address asset = posAssets[i];
+        uint256 length = posAssets.length();
+        // Process all assets in the set
+        for (uint256 i = 0; i < length; i++) {
+            // Since we'll be removing items, always get the first element
+            address asset = posAssets.at(0);
             uint256 amount = positionCollateralAmounts[msg.sender][positionId][asset];
+
             if (amount > 0) {
                 positionCollateralAmounts[msg.sender][positionId][asset] = 0;
-                totalCollateral[asset] -= amount;
+                assetTVL[asset] -= amount;
+
                 TH.safeTransfer(IERC20(asset), msg.sender, amount);
                 emit WithdrawCollateral(msg.sender, positionId, asset, amount);
+                emit TVLUpdated(asset, assetTVL[asset]);
             }
+
+            // Remove the asset from the set after processing
+            posAssets.remove(asset);
         }
 
-        delete positions[msg.sender][positionId].debtAmount;
-        delete positionCollateralAssets[msg.sender][positionId];
-        positions[msg.sender][positionId].status = PositionStatus.CLOSED;
-
+        // Clear position data and mark as closed
+        position.status = PositionStatus.CLOSED;
         emit PositionClosed(msg.sender, positionId);
     }
 
@@ -949,8 +923,14 @@ contract Lendefi is
         uint256 liquidationBonus;
 
         if (position.isIsolated) {
-            Asset memory asset = assetInfo[positionCollateralAssets[user][positionId][0]];
-            liquidationBonus = tierLiquidationBonus[asset.tier];
+            EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[user][positionId];
+            if (posAssets.length() > 0) {
+                Asset memory asset = assetInfo[posAssets.at(0)];
+                liquidationBonus = tierLiquidationBonus[asset.tier];
+            } else {
+                // Fallback to ISOLATED tier if no assets found (shouldn't happen)
+                liquidationBonus = tierLiquidationBonus[CollateralTier.ISOLATED];
+            }
         } else {
             CollateralTier tier = getHighestTier(user, positionId);
             liquidationBonus = tierLiquidationBonus[tier];
@@ -974,7 +954,6 @@ contract Lendefi is
         // Transfer all collateral to liquidator
         _transferCollateralToLiquidator(user, positionId, msg.sender);
     }
-
     /**
      * @notice Updates the base profit target rate for the protocol
      * @param rate The new base profit target rate in parts per million (e.g., 0.0025e6 = 0.25%)
@@ -985,6 +964,7 @@ contract Lendefi is
      * @custom:events Emits:
      *      - UpdateBaseProfitTarget with new rate value
      */
+
     function updateBaseProfitTarget(uint256 rate) external onlyRole(MANAGER_ROLE) {
         if (rate < 0.0025e6) {
             revert RateTooLow(rate, 0.0025e6);
@@ -1370,6 +1350,16 @@ contract Lendefi is
     }
 
     /**
+     * @notice Gets the current USD price for an asset from the oracle module
+     * @param asset The address of the asset to price
+     * @return uint256 The asset price in USD (scaled by oracle decimals)
+     * @dev Uses the oracle module to get the median price from multiple sources
+     */
+    function getAssetPrice(address asset) public returns (uint256) {
+        return oracleModule.getAssetPrice(asset);
+    }
+
+    /**
      * @notice Calculates the total debt amount including accrued interest for a position
      * @param user The address of the position owner
      * @param positionId The ID of the position to calculate debt for
@@ -1399,7 +1389,17 @@ contract Lendefi is
         CollateralTier tier;
 
         if (position.isIsolated) {
-            tier = assetInfo[positionCollateralAssets[user][positionId][0]].tier;
+            EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[user][positionId];
+
+            // Check that there's at least one asset in the set
+            if (posAssets.length() > 0) {
+                // Use at(0) to get the first element from the set
+                address isolatedAsset = posAssets.at(0);
+                tier = assetInfo[isolatedAsset].tier;
+            } else {
+                // Fallback to ISOLATED tier if no assets found (shouldn't happen)
+                tier = CollateralTier.ISOLATED;
+            }
         } else {
             tier = getHighestTier(user, positionId);
         }
@@ -1419,16 +1419,6 @@ contract Lendefi is
      */
     function getAssetInfo(address asset) public view returns (Asset memory) {
         return assetInfo[asset];
-    }
-
-    /**
-     * @notice Gets the current USD price for an asset from the oracle module
-     * @param asset The address of the asset to price
-     * @return uint256 The asset price in USD (scaled by oracle decimals)
-     * @dev Uses the oracle module to get the median price from multiple sources
-     */
-    function getAssetPrice(address asset) public returns (uint256) {
-        return oracleModule.getAssetPrice(asset);
     }
 
     /**
@@ -1464,12 +1454,12 @@ contract Lendefi is
      * @notice Gets the liquidation bonus percentage for a specific position
      * @param user The address of the position owner
      * @param positionId The ID of the position
-     * @dev Returns tier-specific bonus for isolated positions, base fee for cross-collateral
+     * @dev Returns tier-specific bonus for isolated positions, highest tier bonus for cross-collateral
      * @return uint256 The liquidation bonus percentage in parts per million (e.g., 0.05e6 = 5%)
      * @custom:security Validates position exists via validPosition modifier
      * @custom:calculations Uses:
      *      - For isolated positions: returns tier's liquidation bonus
-     *      - For cross-collateral: returns base liquidation fee (1%)
+     *      - For cross-collateral: returns highest tier's liquidation bonus
      */
     function getPositionLiquidationFee(address user, uint256 positionId)
         public
@@ -1478,10 +1468,23 @@ contract Lendefi is
         returns (uint256)
     {
         UserPosition storage position = positions[user][positionId];
+
         if (position.isIsolated) {
-            Asset memory asset = assetInfo[positionCollateralAssets[user][positionId][0]];
-            return tierLiquidationBonus[asset.tier];
+            EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[user][positionId];
+
+            // Check if there are any assets in the set
+            if (posAssets.length() > 0) {
+                // Use EnumerableSet's at() method to access the first element
+                address isolatedAsset = posAssets.at(0);
+                Asset memory asset = assetInfo[isolatedAsset];
+                return tierLiquidationBonus[asset.tier];
+            } else {
+                // Fallback to ISOLATED tier if no assets found (shouldn't happen)
+                return tierLiquidationBonus[CollateralTier.ISOLATED];
+            }
         }
+
+        // For cross-collateral positions, use the highest tier
         CollateralTier tier = getHighestTier(user, positionId);
         return tierLiquidationBonus[tier];
     }
@@ -1506,20 +1509,27 @@ contract Lendefi is
         returns (uint256)
     {
         UserPosition memory position = positions[user][positionId];
-        address[] memory assets = positionCollateralAssets[user][positionId];
+        EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[user][positionId];
         uint256 totalCredit;
 
         if (position.isIsolated) {
-            Asset memory item = assetInfo[assets[0]];
-            uint256 amount = positionCollateralAmounts[user][positionId][assets[0]];
-            uint256 price = getAssetPriceOracle(item.oracleUSD);
-            return
-                (amount * price * item.borrowThreshold * WAD) / 10 ** item.decimals / 1000 / 10 ** item.oracleDecimals;
+            // Check that there's at least one asset in the set
+            if (posAssets.length() > 0) {
+                // Use at(0) to get the isolated asset
+                address isolatedAsset = posAssets.at(0);
+                Asset memory item = assetInfo[isolatedAsset];
+                uint256 amount = positionCollateralAmounts[user][positionId][isolatedAsset];
+                uint256 price = getAssetPriceOracle(item.oracleUSD);
+                return (amount * price * item.borrowThreshold * WAD) / 10 ** item.decimals / 1000
+                    / 10 ** item.oracleDecimals;
+            }
+            return 0; // Return 0 if no collateral assets found
         }
 
         // For cross-collateral positions
-        for (uint256 i = 0; i < assets.length; i++) {
-            address asset = assets[i];
+        uint256 length = posAssets.length();
+        for (uint256 i = 0; i < length; i++) {
+            address asset = posAssets.at(i);
             uint256 amount = positionCollateralAmounts[user][positionId][asset];
             if (amount > 0) {
                 Asset memory assetConfig = assetInfo[asset];
@@ -1554,19 +1564,25 @@ contract Lendefi is
         returns (uint256)
     {
         UserPosition memory position = positions[user][positionId];
-        address[] memory assets = positionCollateralAssets[user][positionId];
+        EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[user][positionId];
         uint256 totalValue;
 
         if (position.isIsolated) {
-            Asset memory item = assetInfo[assets[0]];
-            uint256 amount = positionCollateralAmounts[user][positionId][assets[0]];
-            uint256 price = getAssetPriceOracle(item.oracleUSD);
-            return (amount * price * WAD) / 10 ** item.decimals / 10 ** item.oracleDecimals;
+            // Check if the set has any elements before accessing them
+            if (posAssets.length() > 0) {
+                address isolatedAsset = posAssets.at(0);
+                Asset memory item = assetInfo[isolatedAsset];
+                uint256 amount = positionCollateralAmounts[user][positionId][isolatedAsset];
+                uint256 price = getAssetPriceOracle(item.oracleUSD);
+                return (amount * price * WAD) / 10 ** item.decimals / 10 ** item.oracleDecimals;
+            }
+            return 0; // Return 0 if no assets found
         }
 
         // For cross-collateral positions
-        for (uint256 i = 0; i < assets.length; i++) {
-            address asset = assets[i];
+        uint256 length = posAssets.length();
+        for (uint256 i = 0; i < length; i++) {
+            address asset = posAssets.at(i);
             uint256 amount = positionCollateralAmounts[user][positionId][asset];
             if (amount > 0) {
                 Asset memory assetConfig = assetInfo[asset];
@@ -1680,7 +1696,7 @@ contract Lendefi is
     {
         Asset memory assetConfig = assetInfo[asset];
         price = getAssetPriceOracle(assetConfig.oracleUSD);
-        totalSupplied = totalCollateral[asset];
+        totalSupplied = assetTVL[asset];
         maxSupply = assetConfig.maxSupplyThreshold;
         borrowRate = getBorrowRate(assetConfig.tier);
         liquidationBonus = tierLiquidationBonus[assetConfig.tier];
@@ -1752,26 +1768,28 @@ contract Lendefi is
         returns (uint256)
     {
         uint256 debt = calculateDebtWithInterest(user, positionId);
-        uint256 liqLevel = 0; //calculateCreditLimit(user, positionId);
+        uint256 liqLevel = 0;
 
         // If no debt, return maximum possible health factor
         if (debt == 0) {
             return type(uint256).max; // Return "infinite" health factor
         }
 
-        address[] memory assets = positionCollateralAssets[user][positionId];
+        EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[user][positionId];
+        uint256 length = posAssets.length();
 
-        uint256 len = assets.length;
+        for (uint256 i = 0; i < length; i++) {
+            address asset = posAssets.at(i);
+            uint256 amount = positionCollateralAmounts[user][positionId][asset];
 
-        for (uint256 i; i < len; ++i) {
-            uint256 amount = positionCollateralAmounts[user][positionId][assets[i]];
             if (amount != 0) {
-                Asset memory item = assetInfo[assets[i]];
+                Asset memory item = assetInfo[asset];
                 uint256 price = getAssetPriceOracle(item.oracleUSD);
                 liqLevel += (amount * price * item.liquidationThreshold * WAD) / 10 ** item.decimals / 1000
                     / 10 ** item.oracleDecimals;
             }
         }
+
         return (liqLevel * WAD) / debt;
     }
 
@@ -1789,7 +1807,15 @@ contract Lendefi is
         validPosition(user, positionId)
         returns (address[] memory)
     {
-        return positionCollateralAssets[user][positionId];
+        EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[user][positionId];
+        uint256 length = posAssets.length();
+        address[] memory assets = new address[](length);
+
+        for (uint256 i = 0; i < length; i++) {
+            assets[i] = posAssets.at(i);
+        }
+
+        return assets;
     }
 
     /**
@@ -1958,10 +1984,13 @@ contract Lendefi is
     {
         CollateralTier tier = CollateralTier.STABLE;
 
-        address[] storage assets = positionCollateralAssets[user][positionId];
-        for (uint256 i = 0; i < assets.length; i++) {
-            address asset = assets[i];
+        EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[user][positionId];
+        uint256 length = posAssets.length();
+
+        for (uint256 i = 0; i < length; i++) {
+            address asset = posAssets.at(i);
             uint256 amount = positionCollateralAmounts[user][positionId][asset];
+
             if (amount > 0) {
                 Asset memory assetConfig = assetInfo[asset];
                 if (uint8(assetConfig.tier) > uint8(tier)) {
@@ -2019,22 +2048,24 @@ contract Lendefi is
      *      - WithdrawCollateral for each asset transferred
      */
     function _transferCollateralToLiquidator(address user, uint256 positionId, address liquidator) internal {
-        address[] storage posAssets = positionCollateralAssets[user][positionId];
+        EnumerableSet.AddressSet storage posAssets = positionCollateralAssets[user][positionId];
 
         // Transfer all collateral to liquidator
-        for (uint256 i = 0; i < posAssets.length; i++) {
-            address asset = posAssets[i];
+        uint256 length = posAssets.length();
+        for (uint256 i = 0; i < length; i++) {
+            // Need to always get at(0) since we're removing items as we go
+            address asset = posAssets.at(0);
             uint256 amount = positionCollateralAmounts[user][positionId][asset];
+
             if (amount > 0) {
                 positionCollateralAmounts[user][positionId][asset] = 0;
-                totalCollateral[asset] -= amount;
+                assetTVL[asset] -= amount;
                 TH.safeTransfer(IERC20(asset), liquidator, amount);
                 emit WithdrawCollateral(user, positionId, asset, amount);
             }
-        }
 
-        // Clear position assets array
-        delete positionCollateralAssets[user][positionId];
+            posAssets.remove(asset);
+        }
     }
 
     /**
