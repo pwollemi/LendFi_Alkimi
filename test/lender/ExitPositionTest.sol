@@ -25,14 +25,14 @@ contract ExitPositionTest is BasicDeploy {
     WETHPriceConsumerV3 internal wethOracleInstance;
 
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Deploy mock tokens (USDC already deployed by deployCompleteWithOracle())
         wethInstance = new WETH9();
         rwaToken = new TokenMock("Ondo Finance", "ONDO");
         stableToken = new TokenMock("USDT", "USDT");
@@ -50,21 +50,23 @@ contract ExitPositionTest is BasicDeploy {
         stableOracleInstance.setPrice(1e8); // $1 per USDT
         crossBOracleInstance.setPrice(500e8); // $500 per CROSSB token
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Register oracles with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        oracleInstance.addOracle(address(rwaToken), address(rwaOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(rwaToken), address(rwaOracleInstance));
+
+        oracleInstance.addOracle(address(stableToken), address(stableOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(stableToken), address(stableOracleInstance));
+
+        oracleInstance.addOracle(address(crossBToken), address(crossBOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(crossBToken), address(crossBOracleInstance));
+
+        oracleInstance.addOracle(address(usdcInstance), address(stableOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(usdcInstance), address(stableOracleInstance));
+        vm.stopPrank();
 
         // Setup roles
         vm.prank(guardian);
