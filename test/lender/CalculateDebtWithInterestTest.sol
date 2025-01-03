@@ -18,14 +18,14 @@ contract CalculateDebtWithInterestTest is BasicDeploy {
     StablePriceConsumerV3 internal stableOracleInstance;
 
     function setUp() public {
-        deployComplete();
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
         vm.warp(block.timestamp + 90 days);
         // Deploy mock tokens
-        usdcInstance = new USDC();
+
         wethInstance = new WETH9();
         rwaToken = new MockRWA("Ondo Finance", "ONDO");
 
@@ -38,23 +38,17 @@ contract CalculateDebtWithInterestTest is BasicDeploy {
         wethOracleInstance.setPrice(2500e8); // $2500 per ETH
         rwaOracleInstance.setPrice(1000e8); // $1000 per RWA token
         stableOracleInstance.setPrice(1e8); // $1 per stable token
+        // Register oracles with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        oracleInstance.addOracle(address(rwaToken), address(rwaOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(rwaToken), address(rwaOracleInstance));
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
-
+        oracleInstance.addOracle(address(usdcInstance), address(stableOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(usdcInstance), address(stableOracleInstance));
+        vm.stopPrank();
         // Setup roles
         vm.prank(guardian);
         ecoInstance.grantRole(REWARDER_ROLE, address(LendefiInstance));
