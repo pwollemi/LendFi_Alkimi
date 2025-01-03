@@ -10,7 +10,7 @@ import {WETH9} from "../../contracts/vendor/canonical-weth/contracts/WETH9.sol";
 import {RWAPriceConsumerV3} from "../../contracts/mock/RWAOracle.sol";
 import {WETHPriceConsumerV3} from "../../contracts/mock/WETHOracle.sol";
 import {MockRWA} from "../../contracts/mock/MockRWA.sol";
-import {Lendefi} from "../../contracts/lender/Lendefi.sol";
+// import {Lendefi} from "../../contracts/lender/Lendefi.sol";
 
 contract LendefiTest is BasicDeploy {
     // Events
@@ -23,8 +23,13 @@ contract LendefiTest is BasicDeploy {
     RWAPriceConsumerV3 internal rwaOracleInstance;
     WETHPriceConsumerV3 internal wethOracleInstance;
 
+    // Constants for price setting
+    uint256 internal constant ETH_PRICE = 2500e8; // $2500 per ETH
+    uint256 internal constant RWA_PRICE = 1000e8; // $1000 per RWA token
+
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
         assertEq(tokenInstance.totalSupply(), 0);
 
         // TGE setup
@@ -32,7 +37,7 @@ contract LendefiTest is BasicDeploy {
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
         // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Note: usdcInstance is already deployed by deployCompleteWithOracle()
         wethInstance = new WETH9();
         rwaToken = new MockRWA("Ondo Finance", "ONDO");
 
@@ -40,21 +45,21 @@ contract LendefiTest is BasicDeploy {
         wethOracleInstance = new WETHPriceConsumerV3();
         rwaOracleInstance = new RWAPriceConsumerV3();
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Set prices
+        wethOracleInstance.setPrice(int256(ETH_PRICE)); // $2500 per ETH
+        rwaOracleInstance.setPrice(int256(RWA_PRICE)); // $1000 per RWA token
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        // Set the minimum oracles required to 1 to avoid NotEnoughOracles errors
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.updateMinimumOracles(1);
+
+        // Register oracles with Oracle module
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
+
+        oracleInstance.addOracle(address(rwaToken), address(rwaOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(rwaToken), address(rwaOracleInstance));
+        vm.stopPrank();
 
         // Setup roles
         vm.prank(guardian);
@@ -151,6 +156,7 @@ contract LendefiTest is BasicDeploy {
     }
 
     // Debug test to check credit limit calculation
+    // Debug test to check credit limit calculation
     function test_Debug_CreditLimit() public {
         // Setup borrower with collateral
         rwaToken.mint(bob, 100 ether);
@@ -165,19 +171,22 @@ contract LendefiTest is BasicDeploy {
         LendefiInstance.supplyCollateral(address(rwaToken), 100 ether, positionId);
 
         // Calculate expected credit limit
-        // 100 tokens * $1 per token * 65% LTV = $65
-        uint256 expectedCreditLimit = 65e6; //because USDC is 6 decimals
+        // 100 tokens * $1000 per token * 65% LTV = $65,000 (6 decimal USDC)
+        uint256 expectedCreditLimit = 65_000e6;
 
         // Try to borrow exactly at the credit limit
         LendefiInstance.borrow(positionId, expectedCreditLimit);
 
         // Now try to borrow $1 more - this should revert
-        // Updated to use custom error
+        uint256 currentDebt = LendefiInstance.getPositionDebt(bob, positionId);
+        uint256 creditLimit = LendefiInstance.calculateCreditLimit(bob, positionId);
+
+        // The error should reflect that the total debt (current + new amount) would exceed the credit limit
         vm.expectRevert(
             abi.encodeWithSelector(
                 IPROTOCOL.ExceedsCreditLimit.selector,
-                expectedCreditLimit + 1e6, // requested
-                expectedCreditLimit // creditLimit
+                currentDebt + 1e6, // Total debt after adding new amount
+                creditLimit // Current credit limit
             )
         );
         LendefiInstance.borrow(positionId, 1e6);
@@ -198,8 +207,25 @@ contract LendefiTest is BasicDeploy {
         rwaToken.approve(address(LendefiInstance), 100 ether);
         LendefiInstance.supplyCollateral(address(rwaToken), 100 ether, positionId);
 
+        // Set a higher isolation debt cap to ensure we hit credit limit error first
+        vm.stopPrank();
+        vm.prank(address(timelockInstance));
+        LendefiInstance.updateAssetConfig(
+            address(rwaToken),
+            address(rwaOracleInstance),
+            8, // Oracle decimals
+            18, // Asset decimals
+            1, // Active
+            650, // 65% LTV
+            750, // 75% liquidation threshold
+            1_000_000 ether, // Max supply limit
+            IPROTOCOL.CollateralTier.ISOLATED, // Tier
+            300_000e6 // Isolation debt cap increased to be higher than our credit limit
+        );
+        vm.startPrank(bob);
+
         // Try to borrow way more than allowed
-        uint256 excessBorrowAmount = 100_000e6; // $100,000 is definitely more than 65% of $100,000
+        uint256 excessBorrowAmount = 200_000e6; // $200,000 is definitely more than 65% of $100,000
 
         // Calculate credit limit for correct error value
         uint256 creditLimit = LendefiInstance.calculateCreditLimit(bob, positionId);
@@ -272,7 +298,7 @@ contract LendefiTest is BasicDeploy {
         console2.log("Asset Price:", price);
 
         // Calculation:
-        // 100 ether (10^18) * $1 (10^8) * 650 / (1000 * 10^18 * 10^8) = 65000000 (65 USDC with 6 decimals)
+        // 100 ether (10^18) * $1000 (10^8) * 650 / (1000 * 10^18 * 10^8) = 65_000_000_000 (65M USDC with 6 decimals)
         uint256 expected = (100 ether * price * 650) / (1000 * 10 ** asset.decimals);
         expected = expected / 10 ** asset.oracleDecimals * 1e6; // Convert to USDC decimals
         console2.log("Expected Credit Limit:", expected);
@@ -301,10 +327,10 @@ contract LendefiTest is BasicDeploy {
         assertEq(LendefiInstance.getUserCollateralAmount(bob, positionId, address(rwaToken)), 100 ether);
 
         // Try to borrow first
-        uint256 borrowAmount = 64e6; // 65 USDC (65% LTV)
+        uint256 borrowAmount = 65_000e6; // 65000 USDC (65% of $100,000)
         LendefiInstance.borrow(positionId, borrowAmount);
 
-        // Attempt to withdraw should fail due to existing debt
+        // Attempt to withdraw collateral should fail due to existing debt
         uint256 withdrawAmount = 30 ether;
         uint256 remainingCollateral = 100 ether - withdrawAmount;
         uint256 newCreditLimit = LendefiInstance.calculateCreditLimit(bob, positionId) * remainingCollateral / 100 ether;
@@ -368,15 +394,13 @@ contract LendefiTest is BasicDeploy {
         LendefiInstance.createPosition(address(rwaToken), true);
         uint256 positionId = 0; // First position
 
-        // Enter isolation mode
-        // LendefiInstance.enterIsolationMode(address(rwaToken), positionId);
-
         // Supply collateral
         rwaToken.approve(address(LendefiInstance), 100 ether);
         LendefiInstance.supplyCollateral(address(rwaToken), 100 ether, positionId);
 
         // Calculate expected borrow amount (65% of collateral value)
-        uint256 borrowAmount = 65e6; // USDC is 6 decimals
+        // 100 RWA * $1000 * 65% = $65,000 = 65_000e6 USDC
+        uint256 borrowAmount = 65_000e6; // USDC is 6 decimals
 
         // Check initial balance
         uint256 initialBalance = usdcInstance.balanceOf(bob);
