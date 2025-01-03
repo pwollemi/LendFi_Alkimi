@@ -66,6 +66,7 @@ import {YodaMath} from "../lender/lib/YodaMath.sol";
 import {IPROTOCOL} from "../interfaces/IProtocol.sol";
 import {IECOSYSTEM} from "../interfaces/IEcosystem.sol";
 import {IFlashLoanReceiver} from "../interfaces/IFlashLoanReceiver.sol";
+import {LendefiOracle} from "../oracle/LendefiOracle.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {IERC20, SafeERC20 as TH} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -100,6 +101,9 @@ contract LendefiV2 is
     IERC20 internal tokenInstance;
     /// @dev ecosystem contract instance
     IECOSYSTEM internal ecosystemInstance;
+    // Add in the state variables section
+    /// @dev Oracle module for secure price feeds
+    LendefiOracle internal oracleModule;
 
     EnumerableSet.AddressSet internal listedAsset;
 
@@ -262,6 +266,7 @@ contract LendefiV2 is
      * @param treasury_ The address of the treasury that collects protocol fees
      * @param timelock_ The address of the timelock contract for governance actions
      * @param guardian The address of the initial admin with pausing capability
+     * @param oracle_ The address of the oracle module for price feeds
      * @dev Sets up ERC20 token details, access control roles, and default protocol parameters
      *      including interest rates and liquidation bonuses for each collateral tier
      * @custom:oz-upgrades-unsafe initializer is used instead of constructor for proxy pattern
@@ -272,7 +277,8 @@ contract LendefiV2 is
         address ecosystem,
         address treasury_,
         address timelock_,
-        address guardian
+        address guardian,
+        address oracle_
     ) external initializer {
         __ERC20_init("LENDEFI YIELD TOKEN", "LYT");
         __ERC20Pausable_init();
@@ -281,8 +287,8 @@ contract LendefiV2 is
         __ReentrancyGuard_init();
 
         require(
-            usdc != address(0) && govToken != address(0) && treasury_ != address(0) && timelock_ != address(0)
-                && guardian != address(0),
+            usdc != address(0) && govToken != address(0) && ecosystem != address(0) && treasury_ != address(0)
+                && timelock_ != address(0) && guardian != address(0) && oracle_ != address(0),
             "ZERO_ADDRESS_DETECTED"
         );
 
@@ -295,6 +301,7 @@ contract LendefiV2 is
         tokenInstance = IERC20(govToken);
         ecosystemInstance = IECOSYSTEM(payable(ecosystem));
         treasury = treasury_;
+        oracleModule = LendefiOracle(oracle_);
 
         // Initialize default parameters
         targetReward = 2_000 ether;
@@ -413,7 +420,12 @@ contract LendefiV2 is
      * @custom:events Emits UpdateFlashLoanFee event with new fee value
      */
     function updateFlashLoanFee(uint256 newFee) external onlyRole(MANAGER_ROLE) {
-        // Replace require with if-revert
+        // Add minimum fee check
+        if (newFee < 5) {
+            revert FeeTooLow(newFee, 5); // Minimum 5 basis points (0.05%)
+        }
+
+        // Existing maximum check
         if (newFee > 100) {
             revert FeeTooHigh(newFee, 100);
         }
@@ -1116,12 +1128,7 @@ contract LendefiV2 is
      *      - Asset's liquidation bonus via tierLiquidationBonus
      */
     function updateAssetTier(address asset, CollateralTier newTier) external validAsset(asset) onlyRole(MANAGER_ROLE) {
-        // if (!listedAsset.contains(asset)) {
-        //     revert AssetNotListed(asset);
-        // }
-
         assetInfo[asset].tier = newTier;
-
         emit AssetTierUpdated(asset, newTier);
     }
 
@@ -1158,7 +1165,9 @@ contract LendefiV2 is
         CollateralTier tier,
         uint256 isolationDebtCap
     ) external onlyRole(MANAGER_ROLE) {
-        if (!listedAsset.contains(asset)) {
+        bool newAsset = !listedAsset.contains(asset);
+
+        if (newAsset) {
             require(listedAsset.add(asset), "ADDING_ASSET");
         }
 
@@ -1174,7 +1183,65 @@ contract LendefiV2 is
         item.tier = tier;
         item.isolationDebtCap = isolationDebtCap;
 
+        // Register oracle with oracle module if it's a new asset or oracle changed
+        if (oracle_ != address(0) && (newAsset || item.oracleUSD != oracle_)) {
+            try oracleModule.addOracle(asset, oracle_, oracleDecimals) {
+                // Oracle successfully added
+            } catch {
+                // If adding fails (e.g., oracle already exists), continue without error
+            }
+        }
         emit UpdateAssetConfig(asset);
+    }
+
+    /**
+     * @notice Adds an additional oracle data source for an asset
+     * @param asset Address of the asset
+     * @param oracle Address of the Chainlink price feed to add
+     * @param decimals_ Number of decimals in the oracle price feed
+     * @dev Allows adding secondary or backup oracles to enhance price reliability
+     * @custom:security Can only be called by accounts with MANAGER_ROLE
+     */
+    function addAssetOracle(address asset, address oracle, uint8 decimals_)
+        external
+        validAsset(asset)
+        onlyRole(MANAGER_ROLE)
+    {
+        oracleModule.addOracle(asset, oracle, decimals_);
+    }
+
+    /**
+     * @notice Removes an oracle data source for an asset
+     * @param asset Address of the asset
+     * @param oracle Address of the Chainlink price feed to remove
+     * @dev Allows removing unreliable or deprecated oracles
+     * @custom:security Can only be called by accounts with MANAGER_ROLE
+     */
+    function removeAssetOracle(address asset, address oracle) external validAsset(asset) onlyRole(MANAGER_ROLE) {
+        oracleModule.removeOracle(asset, oracle);
+    }
+
+    /**
+     * @notice Sets the primary oracle for an asset
+     * @param asset Address of the asset
+     * @param oracle Address of the Chainlink price feed to set as primary
+     * @dev The primary oracle is used as a fallback when median calculation fails
+     * @custom:security Can only be called by accounts with MANAGER_ROLE
+     */
+    function setPrimaryAssetOracle(address asset, address oracle) external validAsset(asset) onlyRole(MANAGER_ROLE) {
+        oracleModule.setPrimaryOracle(asset, oracle);
+    }
+
+    /**
+     * @notice Updates oracle time thresholds
+     * @param freshness Maximum age for all price data (in seconds)
+     * @param volatility Maximum age for volatile price data (in seconds)
+     * @dev Controls how old price data can be before rejection
+     * @custom:security Can only be called by accounts with MANAGER_ROLE
+     */
+    function updateOracleTimeThresholds(uint256 freshness, uint256 volatility) external onlyRole(MANAGER_ROLE) {
+        oracleModule.updateFreshnessThreshold(freshness);
+        oracleModule.updateVolatilityThreshold(volatility);
     }
 
     /**
@@ -1355,20 +1422,30 @@ contract LendefiV2 is
     }
 
     /**
-     * @notice Gets the current USD price for an asset from its oracle
+     * @notice Gets the current USD price for an asset from the oracle module
      * @param asset The address of the asset to price
      * @return uint256 The asset price in USD (scaled by oracle decimals)
-     * @dev Fetches price from the asset's configured Chainlink oracle
+     * @dev Uses the oracle module to get the median price from multiple sources
      */
-    function getAssetPrice(address asset) public view returns (uint256) {
-        return getAssetPriceOracle(assetInfo[asset].oracleUSD);
+    function getAssetPrice(address asset) public returns (uint256) {
+        return oracleModule.getAssetPrice(asset);
     }
 
+    /**
+     * @notice DEPRECATED: Direct oracle price access
+     * @dev This function is maintained for backward compatibility
+     * @param oracle The address of the Chainlink price feed oracle
+     * @return Price from the oracle (use getAssetPrice instead)
+     */
+    function getAssetPriceOracle(address oracle) public view returns (uint256) {
+        return oracleModule.getSingleOraclePrice(oracle);
+    }
     /**
      * @notice Gets the total number of positions for a user
      * @param user The address of the user to query
      * @return uint256 The number of positions owned by the user
      */
+
     function getUserPositionsCount(address user) public view returns (uint256) {
         return positions[user].length;
     }
@@ -1852,71 +1929,6 @@ contract LendefiV2 is
      */
     function getTierLiquidationFee(CollateralTier tier) public view returns (uint256) {
         return tierLiquidationBonus[tier];
-    }
-
-    /**
-     * @notice Retrieves a secure price feed from Chainlink oracle with multiple safety validations
-     * @param oracle The address of the Chainlink price feed oracle
-     * @return Price in USD with oracle's native decimal precision
-     * @dev Implements comprehensive safety measures to ensure price reliability:
-     *      1. Core validations:
-     *         - Ensures reported price is positive
-     *         - Verifies the oracle round is complete and answered
-     *         - Checks price data freshness (< 8 hours old)
-     *      2. Volatility protection:
-     *         - For price changes > 20%, requires fresher data (< 1 hour old)
-     *         - Compares current price against previous round data
-     *         - Prevents manipulation through large short-term price movements
-     * @custom:security-layer Designed as a critical security component for accurate asset valuation
-     * @custom:error-cases
-     *      - OracleInvalidPrice: Price must be > 0
-     *      - OracleStalePrice: Oracle must have answered for the current round
-     *      - OracleTimeout: Price timestamp must be recent (within 8 hours)
-     *      - OracleInvalidPriceVolatility: High volatility prices must be fresh (within 1 hour)
-     */
-    function getAssetPriceOracle(address oracle) public view returns (uint256) {
-        // Fetch latest data from Chainlink oracle
-        (uint80 roundId, int256 price,, uint256 timestamp, uint80 answeredInRound) =
-            AggregatorV3Interface(oracle).latestRoundData();
-
-        // Core validations - price must be positive
-        if (price <= 0) {
-            revert OracleInvalidPrice(oracle, price);
-        }
-
-        // Ensure round is complete and answered
-        if (answeredInRound < roundId) {
-            revert OracleStalePrice(oracle, roundId, answeredInRound);
-        }
-
-        // Verify price data freshness - must be less than 8 hours old
-        uint256 age = block.timestamp - timestamp;
-        if (age > 8 hours) {
-            revert OracleTimeout(oracle, timestamp, block.timestamp, 8 hours);
-        }
-
-        // Volatility protection - for significant price movements, enforce stricter freshness
-        if (roundId > 1) {
-            // Fetch previous round data to compare
-            (, int256 previousPrice,, uint256 previousTimestamp,) =
-                AggregatorV3Interface(oracle).getRoundData(roundId - 1);
-
-            // Only evaluate valid historical data points
-            if (previousPrice > 0 && previousTimestamp > 0) {
-                // Calculate price change percentage
-                uint256 priceDelta =
-                    price > previousPrice ? uint256(price - previousPrice) : uint256(previousPrice - price);
-
-                uint256 changePercent = (priceDelta * 100) / uint256(previousPrice);
-
-                // For high volatility (>=20% change), require fresher data (< 1 hour old)
-                if (changePercent >= 20 && age >= 1 hours) {
-                    revert OracleInvalidPriceVolatility(oracle, price, changePercent);
-                }
-            }
-        }
-
-        return uint256(price);
     }
 
     /**
