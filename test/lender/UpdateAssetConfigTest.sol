@@ -23,35 +23,23 @@ contract UpdateAssetConfigTest is BasicDeploy {
     uint256 internal constant ISOLATION_DEBT_CAP = 100_000e6;
 
     function setUp() public {
-        deployComplete();
+        // Use the updated deployment function that includes Oracle setup
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
-        // Deploy USDC
-        usdcInstance = new USDC();
-
-        // Deploy test token and oracle
+        // Deploy test token and oracle for this specific test
         testToken = new MockRWA("Test Token", "TEST");
         testOracle = new RWAPriceConsumerV3();
         testOracle.setPrice(1000e8); // $1000 per token
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
-
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        // Now register the test oracle with our Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(testToken), address(testOracle), ORACLE_DECIMALS);
+        oracleInstance.setPrimaryOracle(address(testToken), address(testOracle));
+        vm.stopPrank();
     }
 
     // Test 1: Only manager can update asset config
