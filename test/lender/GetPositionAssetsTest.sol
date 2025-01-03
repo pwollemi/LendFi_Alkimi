@@ -22,15 +22,15 @@ contract getPositionCollateralAssetsTest is BasicDeploy {
     uint256 constant LINK_PRICE = 15e8; // $15 per LINK
 
     function setUp() public {
-        deployComplete();
+        // Use deployCompleteWithOracle() instead of deployComplete()
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
         tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
         vm.warp(block.timestamp + 90 days);
 
-        // Deploy mock tokens
-        usdcInstance = new USDC();
+        // Deploy mock tokens (USDC already deployed by deployCompleteWithOracle())
         wethInstance = new WETH9();
         linkInstance = new TokenMock("Chainlink", "LINK");
 
@@ -44,21 +44,17 @@ contract getPositionCollateralAssetsTest is BasicDeploy {
         stableOracleInstance.setPrice(1e8); // $1 per stable
         linkOracleInstance.setPrice(int256(LINK_PRICE)); // $15 per LINK
 
-        // Deploy Lendefi
-        bytes memory data = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Register oracles with Oracle module
+        vm.startPrank(address(timelockInstance));
+        oracleInstance.addOracle(address(wethInstance), address(wethOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(wethInstance), address(wethOracleInstance));
 
-        address payable proxy = payable(Upgrades.deployUUPSProxy("Lendefi.sol", data));
-        LendefiInstance = Lendefi(proxy);
+        oracleInstance.addOracle(address(linkInstance), address(linkOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(linkInstance), address(linkOracleInstance));
+
+        oracleInstance.addOracle(address(usdcInstance), address(stableOracleInstance), 8);
+        oracleInstance.setPrimaryOracle(address(usdcInstance), address(stableOracleInstance));
+        vm.stopPrank();
 
         // Setup roles
         vm.prank(guardian);
