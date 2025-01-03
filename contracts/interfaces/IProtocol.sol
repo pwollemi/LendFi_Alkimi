@@ -258,10 +258,39 @@ interface IPROTOCOL is IERC20 {
     event TVLUpdated(address indexed asset, uint256 amount);
 
     /**
+     * @notice Emitted when an additional oracle is added for an asset
+     * @param asset Address of the asset
+     * @param oracle Address of the oracle being added
+     * @param decimals Number of decimals in the oracle price feed
+     */
+    event OracleAdded(address indexed asset, address indexed oracle, uint8 decimals);
+
+    /**
+     * @notice Emitted when an oracle is removed from an asset
+     * @param asset Address of the asset
+     * @param oracle Address of the oracle being removed
+     */
+    event OracleRemoved(address indexed asset, address indexed oracle);
+
+    /**
+     * @notice Emitted when a new primary oracle is set for an asset
+     * @param asset Address of the asset
+     * @param oracle Address of the oracle set as primary
+     */
+    event PrimaryOracleSet(address indexed asset, address indexed oracle);
+
+    /**
+     * @notice Emitted when oracle time thresholds are updated
+     * @param freshness New maximum age for all price data (in seconds)
+     * @param volatility New maximum age for volatile price data (in seconds)
+     */
+    event OracleThresholdsUpdated(uint256 freshness, uint256 volatility);
+    /**
      * @notice Thrown when a position ID is invalid for a user
      * @param user The address of the position owner
      * @param positionId The invalid position ID
      */
+
     error InvalidPosition(address user, uint256 positionId);
 
     /**
@@ -475,7 +504,6 @@ interface IPROTOCOL is IERC20 {
     /// @param requested The requested rate
     /// @param maximum The maximum allowed rate
     error RateTooHigh(uint256 requested, uint256 maximum);
-
     /// @notice Thrown when trying to set a bonus above maximum allowed
     /// @param requested The requested bonus
     /// @param maximum The maximum allowed bonus
@@ -486,25 +514,37 @@ interface IPROTOCOL is IERC20 {
      * @param positionId The ID of the inactive position
      */
     error InactivePosition(address user, uint256 positionId);
+    /**
+     * @notice Thrown when multiple oracles report widely divergent prices
+     * @param asset The address of the asset
+     * @param minPrice The lowest reported price
+     * @param maxPrice The highest reported price
+     * @param threshold The maximum allowed divergence
+     */
+    error OraclePriceDivergence(address asset, uint256 minPrice, uint256 maxPrice, uint256 threshold);
+    /**
+     * @notice Thrown when a circuit breaker has been triggered due to extreme price movements
+     * @param asset The address of the asset
+     * @param currentPrice The current price that triggered the circuit breaker
+     * @param previousPrice The previous valid price
+     * @param changePercent The percentage change that triggered the breaker
+     */
+    error CircuitBreakerTriggered(address asset, uint256 currentPrice, uint256 previousPrice, uint256 changePercent);
 
-    // /**
-    //  * @notice Throwns if slippage requirements aren't met
-    //  * @param amount Amount of LP tokens exchanged, 18 decimals
-    //  * @param minAmountOut Min Value received in exchange, 6 decimals
-    //  */
-    // error SlippageExceeded(uint256 amount, uint256 minAmountOut);
-
-    // Core functions
+    //////////////////////////////////////////////////
+    // ---------------Core functions---------------//
+    /////////////////////////////////////////////////
 
     /**
-     * @notice Initializes the protocol with core contract addresses
-     * @param usdc The address of the USDC stablecoin used for protocol operations
-     * @param govToken The address of the governance token
-     * @param ecosystem The address of the ecosystem contract
-     * @param treasury_ The address of the treasury contract
-     * @param timelock_ The address of the timelock contract for governance
-     * @param guardian The address of the protocol guardian with emergency powers
-     * @dev Can only be called once during contract deployment
+     * @notice Initializes the protocol with core dependencies and parameters
+     * @param usdc The address of the USDC stablecoin used for borrowing and liquidity
+     * @param govToken The address of the governance token used for liquidator eligibility
+     * @param ecosystem The address of the ecosystem contract that manages rewards
+     * @param treasury_ The address of the treasury that collects protocol fees
+     * @param timelock_ The address of the timelock contract for governance actions
+     * @param guardian The address of the initial admin with pausing capability
+     * @param oracle_ The address of the oracle module for price feeds
+     * @dev Sets up ERC20 token details, access control roles, and default protocol parameters
      */
     function initialize(
         address usdc,
@@ -512,7 +552,8 @@ interface IPROTOCOL is IERC20 {
         address ecosystem,
         address treasury_,
         address timelock_,
-        address guardian
+        address guardian,
+        address oracle_
     ) external;
 
     /**
@@ -713,7 +754,7 @@ interface IPROTOCOL is IERC20 {
      * @param asset The address of the asset
      * @return The asset price in USD (scaled by the asset's oracle decimals)
      */
-    function getAssetPrice(address asset) external view returns (uint256);
+    function getAssetPrice(address asset) external returns (uint256);
 
     /**
      * @notice Gets the total number of positions created by a user
@@ -1035,4 +1076,37 @@ interface IPROTOCOL is IERC20 {
      * @return The total collateral amount
      */
     function totalCollateral(address asset) external view returns (uint256);
+
+    /**
+     * @notice Adds an additional oracle data source for an asset
+     * @param asset Address of the asset
+     * @param oracle Address of the Chainlink price feed to add
+     * @param decimals Number of decimals in the oracle price feed
+     * @dev Allows adding secondary or backup oracles to enhance price reliability
+     */
+    function addAssetOracle(address asset, address oracle, uint8 decimals) external;
+
+    /**
+     * @notice Removes an oracle data source for an asset
+     * @param asset Address of the asset
+     * @param oracle Address of the Chainlink price feed to remove
+     * @dev Allows removing unreliable or deprecated oracles
+     */
+    function removeAssetOracle(address asset, address oracle) external;
+
+    /**
+     * @notice Sets the primary oracle for an asset
+     * @param asset Address of the asset
+     * @param oracle Address of the Chainlink price feed to set as primary
+     * @dev The primary oracle is used as a fallback when median calculation fails
+     */
+    function setPrimaryAssetOracle(address asset, address oracle) external;
+
+    /**
+     * @notice Updates oracle time thresholds
+     * @param freshness Maximum age for all price data (in seconds)
+     * @param volatility Maximum age for volatile price data (in seconds)
+     * @dev Controls how old price data can be before rejection
+     */
+    function updateOracleTimeThresholds(uint256 freshness, uint256 volatility) external;
 }
