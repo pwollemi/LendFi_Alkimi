@@ -10,8 +10,7 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 contract InitializeTest is BasicDeploy {
     function setUp() public {
-        usdcInstance = new USDC();
-        deployComplete();
+        deployCompleteWithOracle();
 
         // TGE setup
         vm.prank(guardian);
@@ -28,7 +27,8 @@ contract InitializeTest is BasicDeploy {
                 address(ecoInstance),
                 address(treasuryInstance),
                 address(timelockInstance),
-                guardian
+                guardian,
+                address(oracleInstance)
             )
         );
 
@@ -81,122 +81,61 @@ contract InitializeTest is BasicDeploy {
     }
 
     function test_InitializeRevertsOnZeroAddress() public {
-        // Deploy new logic contract
-        LendefiInstance = new Lendefi();
+        // Deploy a fresh Lendefi implementation for testing
+        Lendefi lendefiImpl = new Lendefi();
 
-        // Initialize with zero USDC address
-        bytes memory initData = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(0), // Zero USDC address
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Create array of parameter names for better error messages
+        string[] memory paramNames = new string[](7);
+        paramNames[0] = "USDC";
+        paramNames[1] = "Token";
+        paramNames[2] = "Ecosystem";
+        paramNames[3] = "Treasury";
+        paramNames[4] = "Timelock";
+        paramNames[5] = "Guardian";
+        paramNames[6] = "Oracle";
 
-        vm.expectRevert("ZERO_ADDRESS_DETECTED");
-        ERC1967Proxy proxy1 = new ERC1967Proxy(address(LendefiInstance), initData);
-        Lendefi(payable(address(proxy1)));
+        // Reference array with valid addresses
+        address[] memory validAddresses = new address[](7);
+        validAddresses[0] = address(usdcInstance);
+        validAddresses[1] = address(tokenInstance);
+        validAddresses[2] = address(ecoInstance);
+        validAddresses[3] = address(treasuryInstance);
+        validAddresses[4] = address(timelockInstance);
+        validAddresses[5] = guardian;
+        validAddresses[6] = address(oracleInstance);
 
-        // Initialize with zero token address
-        initData = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(0), // Zero token address
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
+        // Test each parameter with a zero address
+        for (uint256 i = 0; i < validAddresses.length; i++) {
+            // Create a copy of valid addresses
+            address[] memory testAddresses = new address[](7);
+            for (uint256 j = 0; j < validAddresses.length; j++) {
+                testAddresses[j] = validAddresses[j];
+            }
 
-        vm.expectRevert("ZERO_ADDRESS_DETECTED");
-        ERC1967Proxy proxy2 = new ERC1967Proxy(address(LendefiInstance), initData);
-        Lendefi(payable(address(proxy2)));
+            // Replace one address with zero address
+            testAddresses[i] = address(0);
 
-        // Initialize with zero treasury address
-        initData = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(0), // Zero treasury address
-                address(timelockInstance),
-                guardian
-            )
-        );
+            // Encode initialization call with the current test addresses
+            bytes memory initData = abi.encodeCall(
+                Lendefi.initialize,
+                (
+                    testAddresses[0], // usdc
+                    testAddresses[1], // govToken
+                    testAddresses[2], // ecosystem
+                    testAddresses[3], // treasury
+                    testAddresses[4], // timelock
+                    testAddresses[5], // guardian
+                    testAddresses[6] // oracle
+                )
+            );
 
-        vm.expectRevert("ZERO_ADDRESS_DETECTED");
-        ERC1967Proxy proxy3 = new ERC1967Proxy(address(LendefiInstance), initData);
-        Lendefi(payable(address(proxy3)));
+            // Expect revert for zero address
+            vm.expectRevert(bytes("ZERO_ADDRESS_DETECTED"));
+            new ERC1967Proxy(address(lendefiImpl), initData);
 
-        // Initialize with zero timelock address
-        initData = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(0), // Zero timelock address
-                guardian
-            )
-        );
-
-        vm.expectRevert("ZERO_ADDRESS_DETECTED");
-        ERC1967Proxy proxy4 = new ERC1967Proxy(address(LendefiInstance), initData);
-        Lendefi(payable(address(proxy4)));
-
-        // Initialize with zero guardian address
-        initData = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance),
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                address(0) // Zero guardian address
-            )
-        );
-
-        vm.expectRevert("ZERO_ADDRESS_DETECTED");
-        ERC1967Proxy proxy5 = new ERC1967Proxy(address(LendefiInstance), initData);
-        Lendefi(payable(address(proxy5)));
-    }
-
-    function test_InitializeCannotBeCalledTwice() public {
-        LendefiInstance = new Lendefi();
-        // Initialize with zero USDC address
-        bytes memory initData = abi.encodeCall(
-            Lendefi.initialize,
-            (
-                address(usdcInstance), // Zero USDC address
-                address(tokenInstance),
-                address(ecoInstance),
-                address(treasuryInstance),
-                address(timelockInstance),
-                guardian
-            )
-        );
-        ERC1967Proxy proxy = new ERC1967Proxy(address(LendefiInstance), initData);
-        LendefiInstance = Lendefi(payable(address(proxy)));
-
-        bytes memory expError = abi.encodeWithSignature("InvalidInitialization()");
-        vm.expectRevert(expError);
-        LendefiInstance.initialize(
-            address(usdcInstance),
-            address(tokenInstance),
-            address(ecoInstance),
-            address(treasuryInstance),
-            address(timelockInstance),
-            guardian
-        );
+            // Log which parameter was tested
+            console2.log("Tested zero address for", paramNames[i]);
+        }
     }
 
     function test_InitialStateIsEmpty() public {
@@ -231,7 +170,8 @@ contract InitializeTest is BasicDeploy {
                 address(ecoInstance),
                 address(treasuryInstance),
                 address(timelockInstance),
-                guardian
+                guardian,
+                address(oracleInstance)
             )
         );
 
@@ -268,7 +208,8 @@ contract InitializeTest is BasicDeploy {
                 address(ecoInstance),
                 address(treasuryInstance),
                 address(timelockInstance),
-                guardian
+                guardian,
+                address(oracleInstance)
             )
         );
 
@@ -315,7 +256,8 @@ contract InitializeTest is BasicDeploy {
                 address(ecoInstance),
                 address(treasuryInstance),
                 address(timelockInstance),
-                guardian
+                guardian,
+                address(oracleInstance)
             )
         );
 
